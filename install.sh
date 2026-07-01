@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — sincroniza commands/*.md a ~/.claude/commands/
+# install.sh — sincroniza commands/*.md a ~/.claude/commands/ y registra skills como plugin local
 # Idempotente: re-ejecuta tras `git pull` para aplicar cambios.
 # Estrategia: symlinks (Linux/Mac) para que los cambios en el repo se vean
 # inmediatamente sin reinstalar.
@@ -10,6 +10,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_dir="$repo_root/commands"
 target_dir="$HOME/.claude/commands"
 
+# --- commands ---
 if [[ ! -d "$source_dir" ]]; then
     echo "Source directory not found: $source_dir" >&2
     exit 1
@@ -23,16 +24,21 @@ shopt -u nullglob
 
 if [[ ${#files[@]} -eq 0 ]]; then
     echo "No .md files found in $source_dir"
-    exit 0
+else
+    for file in "${files[@]}"; do
+        name="$(basename "$file")"
+        dest="$target_dir/$name"
+        ln -sfn "$file" "$dest"
+        echo "Linked: $name -> $dest"
+    done
+    echo
+    echo "Done. ${#files[@]} command(s) linked to $target_dir"
 fi
 
-for file in "${files[@]}"; do
-    name="$(basename "$file")"
-    dest="$target_dir/$name"
-    ln -sfn "$file" "$dest"
-    echo "Linked: $name -> $dest"
-done
+# --- skills (install as local plugin) ---
+echo
+echo "Installing skills plugin..."
+claude plugin install "$repo_root" --scope user 2>&1 && echo "Plugin installed." || echo "Plugin install failed — run manually: claude plugin install $repo_root"
 
 echo
-echo "Done. ${#files[@]} command(s) linked to $target_dir"
-echo "Restart Claude Code (or run /help) to see them."
+echo "Restart Claude Code (or run /help) to see all commands and skills."

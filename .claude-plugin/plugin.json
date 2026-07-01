@@ -1,0 +1,26 @@
+{
+  "name": "claude-dotfiles",
+  "description": "Portable slash commands and skills for Claude Code",
+  "author": {
+    "name": "SearchingAlpha"
+  },
+  "plugins": [
+    {
+      "name": "claude-dotfiles",
+      "description": "Personal productivity and engineering skills",
+      "source": "../",
+      "skills": [
+        "../skills/grilling",
+        "../skills/grill-me",
+        "../skills/writing-great-skills",
+        "../skills/diagnosing-bugs",
+        "../skills/tdd",
+        "../skills/prototype",
+        "../skills/domain-modeling",
+        "../skills/handoff",
+        "../skills/to-issues",
+        "../skills/code-review"
+      ]
+    }
+  ]
+}
