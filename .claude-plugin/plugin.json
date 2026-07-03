@@ -19,7 +19,8 @@
         "../skills/domain-modeling",
         "../skills/handoff",
         "../skills/to-issues",
-        "../skills/code-review"
+        "../skills/code-review",
+        "../skills/roast-my-post"
       ]
     }
   ]

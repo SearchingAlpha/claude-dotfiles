@@ -83,6 +83,7 @@ Las skills se instalan como plugin via `claude plugin install`. `install.sh` lo 
 | `grill-me` | user-invoked | Lanza una sesión `/grilling`. |
 | `handoff` | user-invoked | Compacta la conversación en un doc de continuidad para la próxima sesión. |
 | `writing-great-skills` | user-invoked | Referencia para escribir y editar skills — vocabulario y principios de predictabilidad. |
+| `roast-my-post` | user-invoked | Gallo/roaster de borradores (LinkedIn/social, ES o EN): puntúa cuánto suena a IA, destroza los tells citando tu texto, y lo reescribe con voz humana. |
 
 ### Ingeniería
 
