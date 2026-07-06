@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "contracts.json — negotiated evaluation contracts (Generator + Evaluator)",
+  "type": "object",
+  "required": ["contracts"],
+  "properties": {
+    "contracts": {
+      "type": "object",
+      "description": "Keyed by requirement id.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status", "acceptance_criteria", "test_steps"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["proposed", "countered", "agreed"],
+            "description": "proposed=Generator's draft; countered=Evaluator wants changes; agreed=locked, ready to build."
+          },
+          "round": { "type": "integer", "description": "Negotiation round (1-based)." },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Observable, binary pass/fail statements."
+          },
+          "test_steps": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Concrete real-user steps executable in a browser."
+          },
+          "out_of_scope": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Adjacent behavior explicitly NOT required by this requirement."
+          },
+          "generator_notes": { "type": "string" },
+          "evaluator_notes": { "type": "string", "description": "On counter: the specific changes required, citing the spec." }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "contracts": {
+        "notes-001": {
+          "status": "agreed",
+          "round": 2,
+          "acceptance_criteria": [
+            "A visible 'New note' control exists on the main page.",
+            "Submitting non-empty text adds a note to the visible list without a full page reload.",
+            "The new note's text is displayed verbatim in the list."
+          ],
+          "test_steps": [
+            "Navigate to the app root URL.",
+            "Click the 'New note' control and type 'hello world'.",
+            "Submit the note.",
+            "Assert a list item containing exactly 'hello world' is visible and no full navigation occurred."
+          ],
+          "out_of_scope": ["editing an existing note", "deleting a note"],
+          "generator_notes": "Round 2: added the 'verbatim' criterion the evaluator requested.",
+          "evaluator_notes": "Accepted — criteria now fully cover spec description."
+        }
+      }
+    }
+  ]
+}

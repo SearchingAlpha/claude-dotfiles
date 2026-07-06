@@ -1,0 +1,8 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local demo/project dirs — the harness builds apps elsewhere via --project-dir,
+# but ignore these in case someone runs it inside the harness folder.
+/generations/
+/_eval_shots/

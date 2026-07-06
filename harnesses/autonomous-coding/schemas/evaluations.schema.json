@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "evaluations.json — verdicts (written by the Evaluator)",
+  "type": "object",
+  "required": ["evaluations"],
+  "properties": {
+    "evaluations": {
+      "type": "object",
+      "description": "Keyed by requirement id.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": ["pass", "fail"],
+            "description": "pass only if EVERY acceptance criterion was directly observed to hold."
+          },
+          "round": { "type": "integer", "description": "Evaluation attempt (1-based)." },
+          "checked_criteria": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["criterion", "result"],
+              "properties": {
+                "criterion": { "type": "string" },
+                "result": { "type": "string", "enum": ["pass", "fail"] },
+                "evidence": { "type": "string", "description": "What was observed." }
+              }
+            }
+          },
+          "failures": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "On fail: reproducible descriptions (did / expected / observed) for the next build."
+          },
+          "evidence_notes": { "type": "string", "description": "e.g. screenshot paths." }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "evaluations": {
+        "notes-001": {
+          "verdict": "fail",
+          "round": 1,
+          "checked_criteria": [
+            { "criterion": "A visible 'New note' control exists.", "result": "pass",
+              "evidence": "Screenshot shows the button top-right." },
+            { "criterion": "Submitting text adds a note without reload.", "result": "fail",
+              "evidence": "Clicking submit triggered a full page navigation to /notes." }
+          ],
+          "failures": [
+            "Did: typed 'hello world', clicked Save. Expected: item appended in place. Observed: full page reload; the composer used a native form GET without preventDefault."
+          ],
+          "evidence_notes": "Screenshots saved to ./_eval_shots/notes-001-*.png"
+        }
+      }
+    }
+  ]
+}

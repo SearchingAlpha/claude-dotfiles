@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "spec.json — requirements baseline (written once by the Planner)",
+  "type": "object",
+  "required": ["app", "requirements"],
+  "properties": {
+    "app": { "type": "string", "description": "One-line name/summary of the app." },
+    "stack": { "type": "string", "description": "Chosen tech stack." },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "priority", "description"],
+        "properties": {
+          "id": { "type": "string", "description": "Stable kebab-case, category-prefixed, zero-padded (e.g. notes-001)." },
+          "category": { "type": "string" },
+          "priority": { "type": "integer", "description": "Ascending = built first." },
+          "description": { "type": "string", "description": "A single user-observable capability." },
+          "rationale": { "type": "string" },
+          "complexity": {
+            "enum": ["trivial", "standard", "complex"],
+            "description": "Verification ceremony tier. trivial → fast-path (self-contract + build); standard → propose + auto-accept + build; complex → full adversarial negotiation. Absent/unknown defaults to complex."
+          },
+          "verification": {
+            "enum": ["deterministic", "visual"],
+            "description": "How pass/fail is decided. deterministic → read from data-*/DOM/computed CSS (can use a cheaper verdict model); visual → needs screenshot judgment. Absent/unknown defaults to visual."
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "app": "Notes — a minimal single-user notes web app",
+      "stack": "Next.js (App Router) + SQLite",
+      "requirements": [
+        {
+          "id": "notes-001",
+          "category": "Notes",
+          "priority": 1,
+          "description": "User can create a note; it appears in the notes list without a full page reload.",
+          "rationale": "Core value of the app."
+        },
+        {
+          "id": "notes-002",
+          "category": "Notes",
+          "priority": 2,
+          "description": "Notes persist across page reloads.",
+          "rationale": "A notes app that forgets is useless."
+        }
+      ]
+    }
+  ]
+}
