@@ -144,6 +144,8 @@ monitoring commands.
 | `--max-turns` | 200 | Per-session agent-turn cap (passed to `claude`). |
 | `--negotiation-rounds` | 3 | Contract rounds before escalating. |
 | `--build-retries` | 3 | Build attempts per requirement before escalating. |
+| `--session-retries` | 4 | Retries for a session that exits non-zero for a *transient* reason (API/network timeout, throttle) before giving up. State is on disk and sessions are idempotent, so re-running is safe. `0` = fail fast. |
+| `--retry-backoff` | 30 | Base seconds for exponential backoff between session retries (30 → 60 → 120 → 240…). |
 | `--review-every` | 0 (off) | Pause for human review every N iterations. |
 | `--only <req-id>` | — | Run a single requirement end-to-end (cheap testing). |
 | `--status` | — | Print a read-only progress table + git tail and exit (spawns nothing). |

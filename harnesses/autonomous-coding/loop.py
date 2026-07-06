@@ -477,11 +477,32 @@ def orchestrate(args) -> int:
               f"  model: {model}\n{'='*72}")
 
         prompt_text = compose_prompt(role_key, req_id)
+
+        # A session can exit non-zero for a *transient* reason — an API/network
+        # timeout, a Bedrock throttle, a dropped connection — none of which mean
+        # the build is broken. Because all durable state is on disk and each
+        # session is idempotent (re-running the same role+requirement just
+        # recomputes the same artifact), it is safe to simply retry. We retry
+        # with exponential backoff before treating the failure as fatal, so a
+        # single hiccup no longer kills a multi-hour run.
         code = run_session(prompt_text, project_dir, model, args.max_turns)
+        attempt = 0
+        while code != 0 and attempt < args.session_retries:
+            attempt += 1
+            backoff = args.retry_backoff * (2 ** (attempt - 1))
+            print(f"\n⚠ session exited with code {code} "
+                  f"(likely transient). Retry {attempt}/{args.session_retries} "
+                  f"in {backoff}s… State is on disk; this re-runs the same session.")
+            time.sleep(backoff)
+            code = run_session(prompt_text, project_dir, model, args.max_turns)
+
         if code != 0:
-            print(f"\n⚠ session exited with code {code}. State saved; rerun to resume.")
+            print(f"\n⚠ session still failing after {args.session_retries} "
+                  f"retries (exit {code}). State saved; rerun the same command to resume.")
             save_json(state_path, state)
             return code
+        if attempt:
+            print(f"  ✓ recovered after {attempt} retr{'y' if attempt == 1 else 'ies'}.")
 
         apply_result(project_dir, state, role_key, req_id)
         save_json(state_path, state)
@@ -529,6 +550,13 @@ def parse_args(argv=None):
                    help="Max contract-negotiation rounds before escalating (default: 3).")
     p.add_argument("--build-retries", type=int, default=3,
                    help="Max build attempts per requirement before escalating (default: 3).")
+    p.add_argument("--session-retries", type=int, default=4,
+                   help="Retries for a session that exits non-zero for a transient "
+                        "reason (API/network timeout, throttle) before giving up "
+                        "(default: 4). Set 0 to fail fast on the first non-zero exit.")
+    p.add_argument("--retry-backoff", type=int, default=30,
+                   help="Base seconds for exponential backoff between session "
+                        "retries (30 → 60 → 120 → 240…). Default: 30.")
     p.add_argument("--review-every", type=int, default=0,
                    help="Pause for human review every N iterations (0 = never).")
     p.add_argument("--only", default=None,
