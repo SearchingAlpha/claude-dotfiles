@@ -25,9 +25,11 @@ app. A false pass here ships an unverified claim.
    `acceptance_criteria` + `test_steps` that specifically exercise the **extended
    behavior** (the part beyond the parent) — the criteria must be observable,
    binary, and prefer machine-checkable hooks (`data-*`, DOM, computed CSS).
-4. Execute those `test_steps` in a real browser via the Playwright MCP —
-   construct the scenario that triggers the extended behavior, observe, take
-   screenshots as evidence. Check **each** criterion by direct observation.
+4. Execute those `test_steps` in the requirement's `verification` modality — for a
+   `command` req run the commands via Bash and capture exit code / stdout; for a
+   `deterministic`/`visual` req drive a real browser via the Playwright MCP and take
+   screenshots. Construct the scenario that triggers the extended behavior. Check
+   **each** criterion by direct observation.
 
 ## Record the outcome
 

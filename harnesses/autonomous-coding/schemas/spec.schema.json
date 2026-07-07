@@ -6,6 +6,19 @@
   "properties": {
     "app": { "type": "string", "description": "One-line name/summary of the app." },
     "stack": { "type": "string", "description": "Chosen tech stack." },
+    "mode": {
+      "enum": ["greenfield", "extend"],
+      "description": "Build mode. 'greenfield' (default when absent) = a new app scaffolded from scratch. 'extend' = new functionality added to a pre-existing app; the extend-Planner sets this and populates baseline_check."
+    },
+    "baseline_check": {
+      "type": ["object", "null"],
+      "description": "EXTEND-mode regression gate: how to confirm existing behavior still works after each new build. Absent on greenfield specs. The Generator re-runs it after building and the Evaluator re-runs it at verdict; a broken baseline fails the requirement even if the new criteria pass.",
+      "properties": {
+        "command": { "type": ["string", "null"], "description": "Shell command proving existing behavior (e.g. 'pytest', 'npm test', an exit-0 scorecard). null if the app has no runnable check — Evaluator falls back to a smoke test." },
+        "expect": { "type": "string", "description": "Pass condition, normally 'exit 0'." },
+        "notes": { "type": "string", "description": "What the check covers." }
+      }
+    },
     "requirements": {
       "type": "array",
       "items": {
@@ -22,8 +35,8 @@
             "description": "Verification ceremony tier. trivial → fast-path (self-contract + build); standard → propose + auto-accept + build; complex → full adversarial negotiation. Absent/unknown defaults to complex."
           },
           "verification": {
-            "enum": ["deterministic", "visual"],
-            "description": "How pass/fail is decided. deterministic → read from data-*/DOM/computed CSS (can use a cheaper verdict model); visual → needs screenshot judgment. Absent/unknown defaults to visual."
+            "enum": ["deterministic", "visual", "command"],
+            "description": "How pass/fail is decided. command → run a process and assert its exit code / stdout (a CLI/backend capability; no browser — the contract's test_steps ARE shell commands with expected exit/output). deterministic → read from data-*/DOM/computed CSS in a browser. visual → needs screenshot judgment. command and deterministic are mechanical and can use a cheaper verdict model; visual needs the heavier one. Absent/unknown defaults to visual."
           },
           "extends": {
             "type": "string",

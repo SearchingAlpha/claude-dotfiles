@@ -50,9 +50,10 @@ verify your work afterward, so do not cut corners on the build or the self-check
 
 7. Implement ONLY this requirement, satisfying every acceptance criterion. Respect
    `out_of_scope`.
-8. **Self-verify** in the browser (Playwright MCP): run your own `test_steps` and
-   confirm each criterion holds. Take a screenshot. Do not hand off a known-broken
-   build.
+8. **Self-verify** in this requirement's modality: for a `command` req run your
+   `test_steps` via Bash and check exit code / stdout; for a `deterministic`/`visual`
+   req run them in the browser (Playwright MCP) and take a screenshot. Confirm each
+   criterion holds. Do not hand off a known-broken build.
 
 ## Finish
 

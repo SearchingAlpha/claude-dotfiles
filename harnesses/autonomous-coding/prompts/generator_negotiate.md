@@ -44,8 +44,13 @@ vague criteria either; you will be the one held to them.
    - Set `status` to `"proposed"` and bump/annotate `round` to match this session's
      round.
    - `acceptance_criteria`: observable, binary (pass/fail) statements.
-   - `test_steps`: a concrete sequence a real user (or the Playwright MCP) can follow
-     in a browser. No "check the database" — everything user-observable.
+   - `test_steps`: a concrete, executable sequence — **shaped by this requirement's
+     `verification` tag** (see the modalities in the system rules):
+     - `command` reqs → each step is a **shell command with its expected exit code
+       and/or a stdout substring to match** (e.g. `python -m app scenario --scenario
+       cascade` → "exits 0 and stdout contains 'RESULT: PASS'"). No browser steps.
+     - `deterministic`/`visual` reqs → a browser sequence the Playwright MCP can follow
+       (navigate/click/type/observe). No "check the database" — user-observable only.
    - `out_of_scope`: explicitly fence off adjacent behavior so the Evaluator can't
      later fail you for things this requirement never claimed.
    - **Preserve all other requirements' entries** in `contracts.json` unchanged.

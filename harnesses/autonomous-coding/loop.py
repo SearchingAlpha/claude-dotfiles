@@ -30,6 +30,8 @@ import threading
 import time
 from pathlib import Path
 
+from notify import Notifier
+
 HARNESS_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = HARNESS_DIR / "prompts"
 MCP_CONFIG = HARNESS_DIR / "mcp.json"
@@ -43,7 +45,16 @@ AUTO_CONTINUE_DELAY_SECONDS = 3
 # of the adversarial verdicts. resolve_model() maps a role_key to the right one.
 GENERATOR_ROLES = {"generator_negotiate", "generator_build", "generator_fastbuild"}
 EVALUATOR_ROLES = {"evaluator_negotiate", "evaluator_verdict", "evaluator_probe"}
-PLANNER_ROLES = {"planner"}
+PLANNER_ROLES = {"planner", "planner_extend"}
+
+# Build mode. GREENFIELD scaffolds a brand-new app from an app_spec.txt (the
+# original behavior). EXTEND adds new functionality to an app ALREADY present in
+# the project dir: the Planner surveys the existing code instead of scaffolding,
+# and captures a regression baseline so each new requirement is verified without
+# breaking what already works. Only consequential at planning time — it picks the
+# Planner prompt; afterwards the choice is baked into spec.json.
+MODE_GREENFIELD = "greenfield"
+MODE_EXTEND = "extend"
 
 # Complexity tiers (set per-requirement by the Planner in spec.json) decide how
 # much contract ceremony a requirement gets — the process is proportional to
@@ -84,13 +95,15 @@ def resolve_model(role_key: str, args, req: dict | None = None) -> str:
     """Pick the model id for a role, each falling back to the shared --model.
 
     The final verdict is normally the trust anchor and stays on the (heavier)
-    evaluator model. But a requirement the Planner tagged
-    `verification: "deterministic"` (pass/fail decided by reading `data-*`/DOM
-    values, not by judging a screenshot) can have its verdict run on a cheaper
-    model without losing trust — routed via --deterministic-verdict-model.
+    evaluator model. But a requirement whose verdict is *mechanical* rather than a
+    judgment call can run on a cheaper model without losing trust — routed via
+    --deterministic-verdict-model. Two tags qualify: `verification: "deterministic"`
+    (pass/fail read from `data-*`/DOM/computed CSS) and `verification: "command"`
+    (pass/fail read from a process's exit code / stdout — a backend/CLI capability
+    with no browser at all). Both are assertions, not screenshot judgments.
     """
     if role_key in ("evaluator_verdict", "evaluator_probe") and req is not None:
-        if req.get("verification") == "deterministic" and args.deterministic_verdict_model:
+        if req.get("verification") in ("deterministic", "command") and args.deterministic_verdict_model:
             return args.deterministic_verdict_model
     if role_key in GENERATOR_ROLES:
         return args.generator_model or args.model
@@ -109,6 +122,33 @@ CONTRACTS = "contracts.json"     # Generator<->Evaluator negotiated criteria
 EVALUATIONS = "evaluations.json" # Evaluator verdicts
 STATE = "state.json"             # orchestrator bookkeeping (resumable)
 PROGRESS = "claude-progress.txt" # human-readable shift log
+
+# Files the harness itself owns — everything else in the project dir counts as
+# pre-existing app content when deciding greenfield vs extend.
+HARNESS_ARTIFACTS = {
+    APP_SPEC, SPEC, CONTRACTS, EVALUATIONS, STATE, PROGRESS,
+    "init.sh", "run.log",
+}
+# Directory entries that are never "the app" (VCS, harness bookkeeping, caches).
+IGNORED_ENTRIES = {".git", ".gitignore", "_eval_shots", "__pycache__", ".DS_Store"}
+
+
+def detect_mode(project_dir: Path, override: str | None) -> str:
+    """Greenfield vs extend for a first (pre-spec) run.
+
+    An explicit --mode wins. Otherwise: if the project dir holds anything beyond
+    the harness's own artifacts (i.e. real app source/config already lives here),
+    this is an EXTEND run; an empty-or-artifacts-only dir is GREENFIELD — so the
+    original from-scratch behavior is unchanged for a fresh build dir.
+    """
+    if override in (MODE_GREENFIELD, MODE_EXTEND):
+        return override
+    try:
+        entries = [p for p in project_dir.iterdir()
+                   if p.name not in HARNESS_ARTIFACTS and p.name not in IGNORED_ENTRIES]
+    except OSError:
+        entries = []
+    return MODE_EXTEND if entries else MODE_GREENFIELD
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +228,14 @@ def select_role(project_dir: Path, state: dict, only: str | None):
 
     This is the whole control flow of the harness — deliberately explicit.
     """
-    # Phase 0: no spec yet -> Planner bootstraps everything.
+    # Phase 0: no spec yet -> Planner bootstraps everything. The mode (chosen at
+    # launch, persisted in state) picks which Planner: greenfield scaffolds a new
+    # app; extend surveys the app already in the dir and captures a regression
+    # baseline. Default greenfield keeps old runs unchanged.
     if not (project_dir / SPEC).exists():
-        return "planner", None, "no spec.json — bootstrapping with Planner"
+        if state.get("mode") == MODE_EXTEND:
+            return "planner_extend", None, "no spec.json — planning a feature for the EXISTING app"
+        return "planner", None, "no spec.json — bootstrapping with Planner (greenfield)"
 
     reqs = spec_requirements(project_dir)
     if not reqs:
@@ -514,11 +559,13 @@ def show_status(project_dir: Path) -> int:
         rs = req_state(state, r["id"])
         ph = rs["phase"]
         tier = req_complexity(r)
-        det = "*" if r.get("verification") == "deterministic" else " "
+        verif = r.get("verification")
+        det = {"deterministic": "*", "command": "$"}.get(verif, " ")
         print(f"{glyph.get(ph,'·')} {r['id']:<14} {ph:<12} "
               f"{rs['round']}/{rs['retry']}   {tier_glyph.get(tier,'?')}{det}   "
               f"{_truncate(r.get('description',''), 40)}")
-    print("  tier: ○ trivial (fast-path)  ◐ standard (auto-accept)  ● complex (full)   * = deterministic verdict")
+    print("  tier: ○ trivial (fast-path)  ◐ standard (auto-accept)  ● complex (full)   "
+          "verdict: * = deterministic (DOM)  $ = command (exit/stdout)")
     summarize(project_dir, state)
     # Cheap, read-only git tail for orientation.
     try:
@@ -537,10 +584,19 @@ def orchestrate(args) -> int:
     project_dir: Path = args.project_dir.resolve()
     project_dir.mkdir(parents=True, exist_ok=True)
 
+    notifier = Notifier(args.notify_email, region=args.notify_region,
+                        project_label=project_dir.name)
+
     # Copy the harness mcp.json is referenced by absolute path; nothing to copy.
     state_path = project_dir / STATE
     state = load_json(state_path, {})
     state.setdefault("requirements", {})
+    # Resolve build mode ONCE, before any spec exists, and pin it in state so a
+    # later resume never re-decides (e.g. after the extend-Planner has written
+    # files that would fool auto-detection). An existing spec means planning is
+    # already past — keep whatever mode was recorded.
+    if not (project_dir / SPEC).exists() and "mode" not in state:
+        state["mode"] = detect_mode(project_dir, args.mode)
     # Caps live in state so a resume respects the original run's budgets unless
     # the user overrides them on the CLI.
     state["_caps"] = {
@@ -556,10 +612,25 @@ def orchestrate(args) -> int:
         if role_key is None:
             print(f"\n✅ Nothing left to do: {note}")
             summarize(project_dir, state)
+            reqs = spec_requirements(project_dir)
+            done = sum(1 for r in reqs if req_state(state, r["id"])["phase"] == PHASE_DONE)
+            esc = [r["id"] for r in reqs if req_state(state, r["id"])["phase"] == PHASE_ESCALATED]
+            notifier.send(
+                "run complete ✅",
+                f"The autonomous build has finished.\n\n"
+                f"{done}/{len(reqs)} requirements done."
+                + (f"\n⚠ escalated (need review): {', '.join(esc)}" if esc else "")
+                + f"\n\nRun the app:  cd {project_dir} && ./init.sh")
             return 0
 
         if role_key == "escalate":
             summarize(project_dir, state)
+            notifier.send(
+                "escalation — needs you ⚠",
+                f"The build stopped and needs manual intervention:\n\n  {note}\n\n"
+                f"Inspect contracts.json / state.json / the diff, fix, then rerun the "
+                f"same launch command to resume.\n\n"
+                f"Status:  python3 loop.py --project-dir {project_dir} --status")
             pause_for_human(f"ESCALATION — {note}. Inspect artifacts/diff, then resume.")
             # After a human pause we re-loop; state already marks it escalated so
             # it won't spin. The human is expected to fix state.json/contracts by
@@ -598,12 +669,31 @@ def orchestrate(args) -> int:
             print(f"\n⚠ session still failing after {args.session_retries} "
                   f"retries (exit {code}). State saved; rerun the same command to resume.")
             save_json(state_path, state)
+            notifier.send(
+                "fatal error — run halted ❌",
+                f"A session kept failing (exit {code}) after {args.session_retries} "
+                f"retries, so the run halted.\n\n"
+                f"Last: {role_key} on {req_id} — {note}\n\n"
+                f"State is on disk; rerun the same launch command to resume.\n"
+                f"Log tail:  tail -50 {project_dir}/run.log")
             return code
         if attempt:
             print(f"  ✓ recovered after {attempt} retr{'y' if attempt == 1 else 'ies'}.")
 
         apply_result(project_dir, state, role_key, req_id)
         save_json(state_path, state)
+
+        # Progress ping: a requirement just reached `done` via a verdict/probe.
+        # Gated behind --notify-every-pass so a 40-req build doesn't spam the inbox.
+        if (args.notify_every_pass and req_id is not None
+                and role_key in ("evaluator_verdict", "evaluator_probe")
+                and req_state(state, req_id)["phase"] == PHASE_DONE):
+            reqs = spec_requirements(project_dir)
+            done = sum(1 for r in reqs if req_state(state, r["id"])["phase"] == PHASE_DONE)
+            notifier.send(
+                f"{req_id} passed ({done}/{len(reqs)})",
+                f"Requirement {req_id} passed verification.\n\n"
+                f"Progress: {done}/{len(reqs)} requirements done.")
 
         if args.review_every and iteration % args.review_every == 0:
             summarize(project_dir, state)
@@ -625,6 +715,12 @@ def parse_args(argv=None):
     )
     p.add_argument("--project-dir", type=Path, required=True,
                    help="Working dir for the app being built (holds all artifacts).")
+    p.add_argument("--mode", choices=[MODE_GREENFIELD, MODE_EXTEND], default=None,
+                   help="Build mode. 'greenfield' scaffolds a new app from app_spec.txt; "
+                        "'extend' adds functionality to the app already in --project-dir "
+                        "(surveys existing code, captures a regression baseline). Default: "
+                        "auto-detect — extend if the dir already has app source, else "
+                        "greenfield. Only consulted on the first (pre-spec) run.")
     p.add_argument("--model", default=DEFAULT_MODEL,
                    help=f"Shared/fallback model id for any role without its own "
                         f"override (default: {DEFAULT_MODEL}).")
@@ -667,6 +763,18 @@ def parse_args(argv=None):
                         "Default: 1500 (25 min). 0 = off.")
     p.add_argument("--review-every", type=int, default=0,
                    help="Pause for human review every N iterations (0 = never).")
+    p.add_argument("--notify-email", default=None,
+                   help="Email address to notify on run completion, escalation, a "
+                        "fatal error, and each passed requirement. Uses Amazon SES "
+                        "over HTTPS (a mail path that works from locked-down "
+                        "corporate dev hosts); the address must be an SES-verified identity "
+                        "(sandbox). Omit to disable email notifications.")
+    p.add_argument("--notify-region", default="us-east-1",
+                   help="AWS region for the SES notification client (default: us-east-1).")
+    p.add_argument("--notify-every-pass", action="store_true",
+                   help="Also email on EVERY passed requirement (progress pings), not "
+                        "just terminal events. Off by default to avoid inbox spam on a "
+                        "40-requirement build.")
     p.add_argument("--only", default=None,
                    help="Run a single requirement id end-to-end (cheap testing).")
     p.add_argument("--status", action="store_true",
@@ -679,7 +787,8 @@ def preflight() -> None:
         sys.exit("error: `claude` CLI not found on PATH. Install: npm i -g @anthropic-ai/claude-code")
     if not MCP_CONFIG.exists():
         sys.exit(f"error: missing {MCP_CONFIG}")
-    missing = [f for f in ("system.md", "planner.md", "generator_negotiate.md",
+    missing = [f for f in ("system.md", "planner.md", "planner_extend.md",
+                           "generator_negotiate.md",
                            "evaluator_negotiate.md", "generator_build.md", "evaluator_verdict.md",
                            "generator_fastbuild.md", "evaluator_probe.md")
                if not (PROMPTS_DIR / f).exists()]
@@ -705,6 +814,16 @@ def main(argv=None) -> int:
     if args.deterministic_verdict_model:
         print(f"              verdict(deterministic)={args.deterministic_verdict_model}")
     print(f"caps        : negotiation_rounds={args.negotiation_rounds}, build_retries={args.build_retries}")
+    pdir = args.project_dir.resolve()
+    if not (pdir / SPEC).exists():
+        mode = detect_mode(pdir, args.mode)
+        how = "forced" if args.mode else "auto-detected"
+        print(f"mode        : {mode} ({how})"
+              + ("  — surveying existing app, capturing regression baseline"
+                 if mode == MODE_EXTEND else ""))
+    if args.notify_email:
+        pings = "terminal events + every pass" if args.notify_every_pass else "terminal events only"
+        print(f"notify      : {args.notify_email} via SES/{args.notify_region} ({pings})")
     if not (args.project_dir.resolve() / APP_SPEC).exists():
         print(f"\nⓘ No {APP_SPEC} found yet. Create {args.project_dir.resolve()/APP_SPEC} "
               f"describing the app to build, then rerun.")

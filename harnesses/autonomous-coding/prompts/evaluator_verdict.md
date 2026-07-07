@@ -7,20 +7,35 @@ adversarial in spirit: trust nothing you haven't observed yourself.
 
 ## Startup routine
 
-1. Run `pwd`; run `./init.sh` to start the app; confirm it comes up.
+1. Run `pwd`; run `./init.sh` (for a browser requirement this also starts the app;
+   for a `command` requirement it just ensures the editable install is present).
 2. Read this requirement's entry in `spec.json` and its **agreed** contract in
-   `contracts.json` (`acceptance_criteria`, `test_steps`).
+   `contracts.json` (`acceptance_criteria`, `test_steps`) — and note its
+   `verification` tag, which dictates how you observe.
 
 ## Verify
 
-3. Execute the contract's `test_steps` in a real browser via the Playwright MCP —
-   navigate, click, type, and observe, exactly as the steps describe. Take
-   screenshots as evidence.
+3. Execute the contract's `test_steps` in the requirement's modality:
+   - **`command`** → run each step's shell command via **Bash**; capture its exit code
+     and stdout. Evidence is the actual command + observed exit code + the matching
+     stdout excerpt. Do not open a browser.
+   - **`deterministic` / `visual`** → drive a real browser via the Playwright MCP —
+     navigate, click, type, observe exactly as the steps describe. Take screenshots as
+     evidence.
 4. Check **each** `acceptance_criteria` item independently. A criterion passes only if
-   you directly observed it holding. Do not infer from code that behavior works — only
-   from observed app behavior.
+   you directly observed it holding (the command's real exit/stdout, or the real
+   browser behavior). Do not infer from reading the code that behavior works — only
+   from running it.
 5. Also confirm nothing in `out_of_scope` was required to make it pass (i.e. the
    requirement stands on its own).
+5b. **Regression gate (EXTEND runs).** If `spec.json` has a top-level `baseline_check`
+   with a non-null `command`, this run adds to an existing app — the new feature is not
+   enough on its own, it must not break existing behavior. Run the `baseline_check`
+   command via Bash and confirm it still meets its `expect` (normally exit 0). If the
+   baseline now FAILS, the verdict is `"fail"` even when every new acceptance criterion
+   passed: record a failure describing what regressed (command, expected, observed) so
+   the next build fixes it. If `command` is `null`, instead smoke-test the app's core
+   existing flow and confirm it still works. (No `baseline_check`, or greenfield: skip.)
 
 ## Record the verdict
 

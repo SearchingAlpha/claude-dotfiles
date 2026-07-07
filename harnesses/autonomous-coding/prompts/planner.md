@@ -87,13 +87,20 @@ feature code, contracts, or evaluations.
      - When unsure, pick the **higher** tier. Under-tagging a genuinely tricky
        requirement as trivial risks shipping a plausible-but-wrong feature.
    - `verification`: HOW the eventual pass/fail is decided.
-     - `"deterministic"` — checkable by reading concrete values in the running app:
-       `data-*` attributes, computed CSS, presence/text of DOM elements, counts. The
-       verdict is a mechanical assertion, not a judgment call.
-     - `"visual"` — requires human-like judgment of a screenshot: "reads as a shipping
-       box", "looks like an Amazon UI", layout/aesthetics, "nothing overlaps".
-     - Prefer designing requirements (and exposing `data-*` hooks) so behavior is
-       `deterministic` wherever possible; reserve `visual` for genuinely aesthetic ones.
+     - `"command"` — a backend / CLI / library capability with **no browser**, proven
+       by running a process and asserting its **exit code / stdout**: an exit-0
+       scorecard (`python -m app scenario … && echo PASS`), a `pytest` suite, a probe
+       script printing an expected line. Tag every non-browser capability this way and
+       give the contract a concrete oracle command. This is the RIGHT tag for
+       CLI tools, servers, data pipelines, and any backend the user runs from a shell.
+     - `"deterministic"` — a browser capability checkable by reading concrete values in
+       the running app: `data-*` attributes, computed CSS, presence/text of DOM
+       elements, counts. A mechanical assertion, not a judgment call.
+     - `"visual"` — a browser capability requiring human-like judgment of a screenshot:
+       "reads as a shipping box", "looks like an Amazon UI", layout/aesthetics.
+     - Choose by the requirement's nature: backend/CLI → `command`; browser behavior
+       with a machine-checkable hook → `deterministic` (expose `data-*` hooks to enable
+       it); genuinely aesthetic browser output → `visual`.
    - `extends` (optional): the `id` of an earlier requirement this one generalizes or
      narrows, when a correct implementation of that parent likely already satisfies it
      with no new code (see the decomposition guidance above). Triggers the harness's
@@ -102,11 +109,19 @@ feature code, contracts, or evaluations.
      is treated as `complexity: "complex"`, `verification: "visual"` (full ceremony),
      so err toward tagging rather than leaving blank.
 4. **Choose a simple, verifiable stack** and scaffold a minimal project that runs.
-   Prefer a stack the Playwright MCP can drive in a real browser (a web app served on
-   localhost). Keep it boring and mainstream.
-5. **Write `init.sh`** — an idempotent script that installs dependencies and starts
-   the dev server (e.g. `npm install && npm run dev`). Every later session runs this
-   to reach a known-good state, so it must work from a clean checkout. Make it
+   Keep it boring and mainstream. Two shapes are supported, and one app can mix them:
+   - a **browser app** the Playwright MCP drives on localhost (verified `visual` /
+     `deterministic`) — the default when the ask is a web UI; and
+   - a **CLI / backend** the Evaluator drives by running a command and checking its
+     exit code / stdout (verified `command`) — the right shape when the ask is a
+     simulator, server, data pipeline, library, or any tool run from a shell. Design
+     at least one **exit-0 scorecard command** that exercises the core end-to-end (it
+     becomes the headline `command` requirement and the regression gate).
+5. **Write `init.sh`** — an idempotent script that reaches a known-good state from a
+   clean checkout. For a browser app that means install + start the dev server
+   (`npm install && npm run dev`); for a CLI/backend it means install the package
+   (e.g. a venv + `pip install -e ".[dev]"`) so `command` requirements can invoke it —
+   it need not start a long-running server. Every later session runs it first. Make it
    executable (`chmod +x init.sh`).
 6. **Write an initial `claude-progress.txt`** — a short note: what the app is, the
    stack chosen, that the scaffold runs, and that no requirements are implemented yet.

@@ -20,7 +20,11 @@ brings you closer to escalation.
 3. Judge against the spec:
    - Do the criteria, taken together, actually prove the spec's `description`?
    - Is each criterion **observable in the running app** and **binary**?
-   - Are the `test_steps` concrete and executable by a real user / the browser MCP?
+   - Are the `test_steps` concrete and executable **in this requirement's
+     `verification` modality** — for `command`, each step a shell command with an
+     expected exit code / stdout match (no browser); for `deterministic`/`visual`, a
+     sequence the browser MCP can follow? A `command` req whose steps demand a browser
+     (or vice-versa) is a mismatch worth a counter.
    - Does `out_of_scope` improperly exclude something the spec requires? (If so,
      counter.) Excluding genuinely adjacent behavior is fine.
 4. **Update only the `status` (and `evaluator_notes`) of this requirement's entry:**

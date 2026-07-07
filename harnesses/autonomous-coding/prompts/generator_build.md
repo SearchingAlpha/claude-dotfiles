@@ -6,11 +6,13 @@ satisfy that contract — no more, no less — and leave the repo clean.
 ## Startup routine (do this every session — you have no memory)
 
 1. Run `pwd` to confirm the working directory.
-2. Run `./init.sh` to install deps and start the app; confirm it comes up.
+2. Run `./init.sh` to install deps (and, for a browser requirement, start the app);
+   confirm it comes up.
 3. Read `claude-progress.txt` and `git log --oneline -15` to learn recent work.
-4. Do a quick smoke test of the app's core flow in the browser (Playwright MCP). **If
-   the app is broken, fixing that comes first** — a broken baseline makes this
-   requirement unverifiable.
+4. Smoke-test the app's core flow — in the browser (Playwright MCP) for a
+   `deterministic`/`visual` requirement, or by running the relevant command for a
+   `command` requirement. **If the baseline is broken, fixing that comes first** — a
+   broken baseline makes this requirement unverifiable.
 
 ## Build
 
@@ -21,11 +23,20 @@ satisfy that contract — no more, no less — and leave the repo clean.
    Don't re-implement blindly — target what actually failed.
 7. Implement ONLY this requirement. Satisfy every `acceptance_criteria` item. Respect
    `out_of_scope` — don't build adjacent features now.
-8. **Self-verify before handing off.** Run the contract's `test_steps` yourself in the
-   browser (Playwright MCP) as a real user would, and confirm each acceptance
-   criterion actually holds. Take a screenshot of the working result. If it doesn't
-   pass your own check, keep working — do not hand a known-broken build to the
-   Evaluator.
+8. **Self-verify before handing off.** Run the contract's `test_steps` yourself and
+   confirm each acceptance criterion actually holds — for a `command` requirement run
+   the commands via Bash and check the exit code / stdout; for a `deterministic`/
+   `visual` requirement drive the browser (Playwright MCP) as a real user and take a
+   screenshot. If it doesn't pass your own check, keep working — do not hand a
+   known-broken build to the Evaluator.
+8b. **Don't break what already works (EXTEND runs).** If `spec.json` has a top-level
+   `baseline_check` with a non-null `command`, you are adding to an existing app: run
+   that command and confirm it still meets its `expect` (normally exit 0) AFTER your
+   change. A green baseline is part of your build — if your change broke existing
+   behavior, fix it before handing off. You are working *within* the existing
+   architecture: reuse its seams and match its conventions; make the **smallest change**
+   that satisfies this requirement, and touch unrelated code only if the baseline check
+   forces it. (No `baseline_check`, or greenfield: skip this step.)
 
 ## Finish
 

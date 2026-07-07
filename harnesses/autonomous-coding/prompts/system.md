@@ -41,8 +41,31 @@ the current working directory:
    role is allowed to change. When editing one requirement's entry, do not rewrite
    the others.
 6. **Prefer real verification over assertion.** "It should work" is not evidence.
-   Use the tools available (a real browser via the Playwright MCP, running the app
-   via `init.sh`) to observe actual behavior.
+   Observe actual behavior with the tools available.
+
+## Verification modalities — how a requirement is proven
+
+Each requirement carries a `verification` tag in `spec.json` that decides HOW its
+pass/fail is observed. Match your evidence to the tag:
+
+- **`command`** — a backend / CLI / library capability with **no browser**. It is
+  proven by **running a process and asserting its exit code and/or stdout**: e.g.
+  `python -m app scenario … && echo PASS` exiting 0, `pytest` passing, a probe script
+  printing an expected line. For these requirements the contract's `test_steps` ARE
+  shell commands, each paired with its expected exit code / stdout substring. Verify
+  them with **Bash**, not the browser. Do NOT open Playwright for a `command`
+  requirement — there is nothing to render.
+- **`deterministic`** — a browser capability checked mechanically: a `data-*`
+  attribute value, computed CSS, presence/text/count of DOM elements. Use the
+  Playwright MCP and assert concrete values.
+- **`visual`** — a browser capability needing human-like judgment of a screenshot
+  ("reads as a shipping box", "the mimic turns red under a fault"). Use the Playwright
+  MCP and take screenshots as evidence.
+
+An absent/unknown tag defaults to `visual` (full browser ceremony), so older specs are
+unchanged. `command` requirements typically do NOT need `init.sh` to have *started a
+server* — they run their own process — but you must still be in a working editable
+install; run `init.sh` if the app isn't installed yet.
 
 The task header below tells you your role and your target requirement. Follow the
 role-specific instructions that come after it.
