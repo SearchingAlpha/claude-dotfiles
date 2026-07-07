@@ -401,17 +401,23 @@ def print_stream_event(raw: str) -> None:
 
 
 def run_session(prompt_text: str, project_dir: Path, model: str, max_turns: int,
-                idle_timeout: int = 0) -> int:
+                idle_timeout: int = 0, max_session_seconds: int = 0) -> int:
     """Run one `claude -p` session, streaming its output. Returns exit code.
 
-    A session can *hang* (as opposed to exit non-zero): the Generator gets stuck
-    looping on a hard scenario, or a browser eval never returns, and the process
-    sits at ~0% CPU producing no output indefinitely — the stdout iterator below
-    blocks forever. `idle_timeout` (seconds, 0 = disabled) arms a watchdog thread
-    that kills the process if NO output line has arrived for that long. Killing it
-    makes proc.wait() return non-zero, so the caller's retry logic then restarts
-    the session cleanly. We track *time since last output*, not total wall-clock,
-    so a slow-but-active session (streaming events) is never falsely killed.
+    A session can go bad in two ways short of exiting non-zero, and the watchdog
+    guards against both:
+      * HARD HANG — process sits at ~0% CPU producing no output at all (a frozen
+        browser eval, a wedged model call). Caught by `idle_timeout`: kill if NO
+        output line has arrived for that many seconds.
+      * PRODUCTIVE STALL — the agent is stuck in a *loop* (e.g. repeatedly trying
+        to script an elaborate board scenario: "this is fragile, let me rewrite
+        it…"), still emitting a line every so often, so the idle timer keeps
+        resetting and never trips. Caught by `max_session_seconds`: a hard cap on
+        TOTAL wall-clock for the session regardless of output.
+    Either trip kills the process; proc.wait() then returns non-zero and the
+    caller's retry logic restarts the session cleanly. A slow-but-genuinely-
+    progressing session (steady event stream, finishes under the cap) is untouched.
+    Both are seconds; 0 disables that guard.
     """
     cmd = build_cmd(prompt_text, project_dir, model, max_turns)
     proc = subprocess.Popen(
@@ -423,27 +429,34 @@ def run_session(prompt_text: str, project_dir: Path, model: str, max_turns: int,
         bufsize=1,
     )
 
-    last_output = [time.monotonic()]   # list = mutable cell shared with the watchdog
-    killed_idle = [False]
+    start = time.monotonic()
+    last_output = [start]              # mutable cell shared with the watchdog
+    killed_reason = [None]             # "idle" | "cap" once the watchdog fires
     stop_watchdog = threading.Event()
 
+    def _kill(reason: str, msg: str):
+        killed_reason[0] = reason
+        print(f"\n⏱  {msg} Killing it; the retry will restart this session.")
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
     def watchdog():
-        # Poll a few times per idle window so we react promptly without busy-waiting.
-        interval = max(1, idle_timeout // 10)
+        # Poll frequently relative to the tighter of the two active guards.
+        guards = [t for t in (idle_timeout, max_session_seconds) if t and t > 0]
+        interval = max(1, min(guards) // 10) if guards else 5
         while not stop_watchdog.wait(interval):
-            if time.monotonic() - last_output[0] > idle_timeout:
-                killed_idle[0] = True
-                print(f"\n⏱  no output for {idle_timeout}s — session appears hung. "
-                      f"Killing it; the retry will restart this session.")
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                return
+            now = time.monotonic()
+            if idle_timeout and idle_timeout > 0 and now - last_output[0] > idle_timeout:
+                return _kill("idle", f"no output for {idle_timeout}s — session appears hung.")
+            if max_session_seconds and max_session_seconds > 0 and now - start > max_session_seconds:
+                return _kill("cap", f"session exceeded the {max_session_seconds}s hard cap "
+                                    f"(likely stuck in a loop while still printing).")
 
     wd = None
-    if idle_timeout and idle_timeout > 0:
+    if (idle_timeout and idle_timeout > 0) or (max_session_seconds and max_session_seconds > 0):
         wd = threading.Thread(target=watchdog, daemon=True)
         wd.start()
 
@@ -459,7 +472,7 @@ def run_session(prompt_text: str, project_dir: Path, model: str, max_turns: int,
     code = proc.wait()
     # Normalize a watchdog kill to a clearly non-zero code so the retry path fires
     # even on the off chance the terminated process reports 0.
-    return code if not killed_idle[0] else (code or 124)
+    return code if killed_reason[0] is None else (code or 124)
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +581,8 @@ def orchestrate(args) -> int:
         # recomputes the same artifact), it is safe to simply retry. We retry
         # with exponential backoff before treating the failure as fatal, so a
         # single hiccup no longer kills a multi-hour run.
-        code = run_session(prompt_text, project_dir, model, args.max_turns, args.idle_timeout)
+        code = run_session(prompt_text, project_dir, model, args.max_turns,
+                           args.idle_timeout, args.max_session_seconds)
         attempt = 0
         while code != 0 and attempt < args.session_retries:
             attempt += 1
@@ -577,7 +591,8 @@ def orchestrate(args) -> int:
                   f"(likely transient). Retry {attempt}/{args.session_retries} "
                   f"in {backoff}s… State is on disk; this re-runs the same session.")
             time.sleep(backoff)
-            code = run_session(prompt_text, project_dir, model, args.max_turns, args.idle_timeout)
+            code = run_session(prompt_text, project_dir, model, args.max_turns,
+                           args.idle_timeout, args.max_session_seconds)
 
         if code != 0:
             print(f"\n⚠ session still failing after {args.session_retries} "
@@ -645,6 +660,11 @@ def parse_args(argv=None):
                         "seconds (it has hung), so the retry can restart it. "
                         "Tracks time-since-last-output, not total runtime, so slow "
                         "but active sessions are safe. Default: 600 (10 min). 0 = off.")
+    p.add_argument("--max-session-seconds", type=int, default=1500,
+                   help="Hard cap on TOTAL wall-clock per session regardless of "
+                        "output, so a session stuck in a loop while still printing "
+                        "(idle-timeout never trips) is killed and retried. "
+                        "Default: 1500 (25 min). 0 = off.")
     p.add_argument("--review-every", type=int, default=0,
                    help="Pause for human review every N iterations (0 = never).")
     p.add_argument("--only", default=None,

@@ -146,7 +146,8 @@ monitoring commands.
 | `--build-retries` | 3 | Build attempts per requirement before escalating. |
 | `--session-retries` | 4 | Retries for a session that exits non-zero for a *transient* reason (API/network timeout, throttle) before giving up. State is on disk and sessions are idempotent, so re-running is safe. `0` = fail fast. |
 | `--retry-backoff` | 30 | Base seconds for exponential backoff between session retries (30 → 60 → 120 → 240…). |
-| `--idle-timeout` | 600 | Kill a session that produces **no output** for this many seconds (it has hung — stuck loop / hung browser eval, ~0% CPU) so the retry can restart it. Tracks time-since-last-output, not total runtime, so slow-but-active sessions are safe. `0` = off. |
+| `--idle-timeout` | 600 | Kill a session that produces **no output** for this many seconds (a true hang — frozen browser eval, wedged model call, ~0% CPU) so the retry can restart it. Tracks time-since-last-output. `0` = off. |
+| `--max-session-seconds` | 1500 | Hard cap on **total** wall-clock per session regardless of output — catches a session stuck in a *loop while still printing* (e.g. repeatedly rewriting an elaborate test-scenario script), which the idle timer never trips on. `0` = off. |
 | `--review-every` | 0 (off) | Pause for human review every N iterations. |
 | `--only <req-id>` | — | Run a single requirement end-to-end (cheap testing). |
 | `--status` | — | Print a read-only progress table + git tail and exit (spawns nothing). |
