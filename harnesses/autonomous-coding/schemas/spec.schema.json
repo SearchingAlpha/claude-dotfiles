@@ -24,6 +24,10 @@
           "verification": {
             "enum": ["deterministic", "visual"],
             "description": "How pass/fail is decided. deterministic → read from data-*/DOM/computed CSS (can use a cheaper verdict model); visual → needs screenshot judgment. Absent/unknown defaults to visual."
+          },
+          "extends": {
+            "type": "string",
+            "description": "Optional id of an earlier requirement this one generalizes/narrows and likely satisfies with no new code. Triggers a verify-first probe (verdict against existing code before spending a build). Omit for genuinely-new requirements."
           }
         }
       }

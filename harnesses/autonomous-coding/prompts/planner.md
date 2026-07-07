@@ -12,6 +12,24 @@ feature code, contracts, or evaluations.
    capability (e.g. "user can create a note and see it appear in the list"), not a
    technical task ("set up the database"). If it can't be checked by observing the
    running app as a user, reconsider it.
+   - **Don't over-split.** Every requirement pays a fixed verification cost (a
+     contract + a build + a verdict, several full sessions). So a requirement must
+     earn its own slot by needing *distinct new code or a distinct new risk*. Do NOT
+     carve a single behavior into a requirement per edge case or per variant when one
+     correct implementation covers them all — fold those variants into that one
+     requirement's acceptance criteria instead. Example: "a full row clears and rows
+     above shift down" and "clearing 2–4 rows at once works" are usually ONE
+     requirement (a correct clear algorithm handles N rows) — make it one requirement
+     whose criteria explicitly test the multi-row case, not two. Rule of thumb: if
+     requirement B would likely pass against a correct implementation of A *with no
+     new code*, it should be a criterion of A, not its own requirement.
+   - **When you DO split a generalization into its own requirement** (sometimes it's
+     genuinely clearer to keep them separate), tag the follow-on with
+     `extends: "<parent-id>"`. The harness then probes it verify-first — it checks the
+     extended behavior against the parent's code before spending a build, so if the
+     parent already generalizes it costs one session, not four. Only use `extends`
+     when the follow-on plausibly needs *no new code* beyond the parent; a genuinely
+     new capability is a normal requirement.
 3. **Write `spec.json`** with this exact shape:
    ```json
    {
@@ -58,9 +76,13 @@ feature code, contracts, or evaluations.
        box", "looks like an Amazon UI", layout/aesthetics, "nothing overlaps".
      - Prefer designing requirements (and exposing `data-*` hooks) so behavior is
        `deterministic` wherever possible; reserve `visual` for genuinely aesthetic ones.
-   - Both fields are advisory routing hints — an omitted/unknown value is treated as
-     `complexity: "complex"`, `verification: "visual"` (full ceremony), so err toward
-     tagging rather than leaving blank.
+   - `extends` (optional): the `id` of an earlier requirement this one generalizes or
+     narrows, when a correct implementation of that parent likely already satisfies it
+     with no new code (see the decomposition guidance above). Triggers the harness's
+     verify-first probe. Omit it for normal, genuinely-new requirements.
+   - `complexity`/`verification` are advisory routing hints — an omitted/unknown value
+     is treated as `complexity: "complex"`, `verification: "visual"` (full ceremony),
+     so err toward tagging rather than leaving blank.
 4. **Choose a simple, verifiable stack** and scaffold a minimal project that runs.
    Prefer a stack the Playwright MCP can drive in a real browser (a web app served on
    localhost). Keep it boring and mainstream.

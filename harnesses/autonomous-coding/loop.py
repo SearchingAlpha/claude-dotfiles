@@ -41,7 +41,7 @@ AUTO_CONTINUE_DELAY_SECONDS = 3
 # and Evaluator stay on the (default) heavier model for quality of the spec and
 # of the adversarial verdicts. resolve_model() maps a role_key to the right one.
 GENERATOR_ROLES = {"generator_negotiate", "generator_build", "generator_fastbuild"}
-EVALUATOR_ROLES = {"evaluator_negotiate", "evaluator_verdict"}
+EVALUATOR_ROLES = {"evaluator_negotiate", "evaluator_verdict", "evaluator_probe"}
 PLANNER_ROLES = {"planner"}
 
 # Complexity tiers (set per-requirement by the Planner in spec.json) decide how
@@ -66,6 +66,19 @@ def req_complexity(req: dict) -> str:
     return c if c in COMPLEXITY_TIERS else COMPLEXITY_COMPLEX
 
 
+def req_extends(req: dict):
+    """A requirement may declare it *extends* an earlier one (`extends: <id>`):
+    a generalization or narrower case whose behavior a correct implementation of
+    the parent likely ALREADY satisfies (e.g. multi-row clear extends single-row
+    clear; the algorithm generalizes with no new code). For these, the harness
+    tries a verify-FIRST probe: run the Evaluator against the extended behavior
+    up front, and only fall through to the normal negotiate→build→verify cycle if
+    the probe fails. Turns a redundant 4-session requirement into 1 session when
+    the capability is already present. Absent/blank → None (normal flow)."""
+    e = req.get("extends")
+    return e if isinstance(e, str) and e.strip() else None
+
+
 def resolve_model(role_key: str, args, req: dict | None = None) -> str:
     """Pick the model id for a role, each falling back to the shared --model.
 
@@ -75,7 +88,7 @@ def resolve_model(role_key: str, args, req: dict | None = None) -> str:
     values, not by judging a screenshot) can have its verdict run on a cheaper
     model without losing trust — routed via --deterministic-verdict-model.
     """
-    if role_key == "evaluator_verdict" and req is not None:
+    if role_key in ("evaluator_verdict", "evaluator_probe") and req is not None:
         if req.get("verification") == "deterministic" and args.deterministic_verdict_model:
             return args.deterministic_verdict_model
     if role_key in GENERATOR_ROLES:
@@ -199,6 +212,19 @@ def select_role(project_dir: Path, state: dict, only: str | None):
             complexity = req_complexity(req)
             status = contract_status(project_dir, rid)
 
+            # VERIFY-FIRST (extension requirements): if this requirement declares
+            # `extends: <parent-id>` and the parent is already done, try one probe
+            # session — the Evaluator writes a contract for the extended behavior
+            # and verdicts it against the CURRENT code, no build. If the parent's
+            # implementation already generalizes (the common case), it passes and
+            # we skip negotiate+build entirely. Fires at most once; on fail we fall
+            # through to the normal cycle below (with a contract already on disk).
+            parent = req_extends(req)
+            if (parent and not rs.get("probed")
+                    and req_state(state, parent)["phase"] == PHASE_DONE):
+                rs["probed"] = True
+                return "evaluator_probe", rid, f"{rid}: verify-first probe (extends {parent})"
+
             # TRIVIAL: skip negotiation entirely — one Generator session writes its
             # own (agreed) contract and builds. The Evaluator still verdicts after.
             if complexity == COMPLEXITY_TRIVIAL:
@@ -252,6 +278,19 @@ def apply_result(project_dir: Path, state: dict, role_key: str, req_id: str) -> 
         # Building finished (fastbuild also wrote its own agreed contract) -> hand
         # off to independent evaluation.
         rs["phase"] = PHASE_EVALUATING
+
+    elif role_key == "evaluator_probe":
+        # Verify-first probe: the Evaluator verdicted the extended behavior against
+        # the existing code. Pass -> done with no build. Fail -> leave the req in
+        # `negotiating`; select_role() falls through to the normal cycle (and won't
+        # re-probe, since rs["probed"] is set). The probe leaves a countered/absent
+        # contract so the Generator revises it into something buildable.
+        evals = load_json(project_dir / EVALUATIONS, {})
+        entry = (evals.get("evaluations", {}) if isinstance(evals, dict) else {}).get(req_id, {})
+        verdict = entry.get("verdict") if isinstance(entry, dict) else None
+        if verdict == "pass":
+            rs["phase"] = PHASE_DONE
+        # else: stay in PHASE_NEGOTIATING, normal flow resumes next iteration.
 
     elif role_key == "evaluator_verdict":
         evals = load_json(project_dir / EVALUATIONS, {})
@@ -573,7 +612,7 @@ def preflight() -> None:
         sys.exit(f"error: missing {MCP_CONFIG}")
     missing = [f for f in ("system.md", "planner.md", "generator_negotiate.md",
                            "evaluator_negotiate.md", "generator_build.md", "evaluator_verdict.md",
-                           "generator_fastbuild.md")
+                           "generator_fastbuild.md", "evaluator_probe.md")
                if not (PROMPTS_DIR / f).exists()]
     if missing:
         sys.exit(f"error: missing prompt files in {PROMPTS_DIR}: {', '.join(missing)}")

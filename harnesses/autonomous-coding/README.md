@@ -173,6 +173,21 @@ while `visual` verdicts stay on the heavier evaluator model.
 behavior — so old specs and in-flight runs are unchanged. The `--status` table shows the
 tier per requirement (`○` trivial, `◐` standard, `●` complex; `*` = deterministic verdict).
 
+### Verify-first for extension requirements
+
+Sometimes a requirement is really a *generalization* of an earlier one that a correct
+implementation already covers — e.g. "clear 2–4 rows at once" over "clear one row"; the
+clear algorithm generalizes with no new code. Building it anyway wastes a full
+negotiate→build→verify cycle to produce (literally, in one observed run) a comment.
+
+The Planner tags such a requirement `extends: "<parent-id>"`. Once the parent is `done`,
+the harness runs a **verify-first probe**: the Evaluator writes a contract for the
+extended behavior and verdicts it against the *current* code — no build. If it already
+holds, the requirement is done in **one session** instead of four. If the probe fails, it
+falls through to the normal cycle (with the probe's contract as the starting point) and
+does not re-probe. Best paired with coarser decomposition — prefer folding a
+generalization into the parent's acceptance criteria over a separate `extends` requirement.
+
 Example — Opus plans/judges, Sonnet builds, cheap deterministic verdicts:
 
 ```bash
