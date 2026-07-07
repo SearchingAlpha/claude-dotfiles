@@ -7,11 +7,29 @@ feature code, contracts, or evaluations.
 ## Steps
 
 1. **Read `app_spec.txt`** — the human's description of the app to build.
-2. **Decompose it into requirements.** Aim for ~30–80 small, independently
-   verifiable requirements. Each requirement should be a single user-observable
-   capability (e.g. "user can create a note and see it appear in the list"), not a
-   technical task ("set up the database"). If it can't be checked by observing the
-   running app as a user, reconsider it.
+2. **Size the app first, THEN pick a granularity.** Requirement count is not fixed —
+   it should scale with how big and how risky the thing you're building actually is.
+   Before decomposing, judge the app's scope and match it to a band:
+   - **Small / throwaway** (a single-page widget, a calculator, a one-screen toy):
+     **~5–12 requirements.** Group generously; a whole small feature can be one
+     requirement. Don't manufacture ceremony a 200-line app doesn't need.
+   - **Medium** (a game like Tetris, a CRUD notes app, a dashboard): **~15–30
+     requirements.** Group tightly-coupled behaviors into one (e.g. "scoring: award
+     points on clears + display it + level-up thresholds" is ONE requirement, not
+     three). This is the common case.
+   - **Large / multi-subsystem** (auth + data + multiple views, or genuinely complex
+     domain logic): **~30–60+ requirements.** Finer splitting is justified here because
+     the risk and surface area are real.
+   State your chosen band and count in `claude-progress.txt` so the choice is visible.
+   Bias toward the COARSER end of a band: each requirement is a full multi-session
+   verification cycle, so fewer-but-meatier requirements finish faster than many
+   thin ones — as long as each is still independently verifiable in one browser session.
+
+   Each requirement is a single user-observable capability (e.g. "user can create a
+   note and see it appear in the list"), not a technical task ("set up the database").
+   If it can't be checked by observing the running app as a user, reconsider it. A
+   good requirement is as large as it can be while still (a) building in one session
+   and (b) getting an unambiguous pass/fail from a browser test.
    - **Don't over-split.** Every requirement pays a fixed verification cost (a
      contract + a build + a verdict, several full sessions). So a requirement must
      earn its own slot by needing *distinct new code or a distinct new risk*. Do NOT

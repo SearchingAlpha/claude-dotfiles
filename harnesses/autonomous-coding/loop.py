@@ -26,6 +26,7 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -399,8 +400,19 @@ def print_stream_event(raw: str) -> None:
         print(f"  ── session result: {evt.get('subtype', 'ok')}{suffix}")
 
 
-def run_session(prompt_text: str, project_dir: Path, model: str, max_turns: int) -> int:
-    """Run one `claude -p` session, streaming its output. Returns exit code."""
+def run_session(prompt_text: str, project_dir: Path, model: str, max_turns: int,
+                idle_timeout: int = 0) -> int:
+    """Run one `claude -p` session, streaming its output. Returns exit code.
+
+    A session can *hang* (as opposed to exit non-zero): the Generator gets stuck
+    looping on a hard scenario, or a browser eval never returns, and the process
+    sits at ~0% CPU producing no output indefinitely — the stdout iterator below
+    blocks forever. `idle_timeout` (seconds, 0 = disabled) arms a watchdog thread
+    that kills the process if NO output line has arrived for that long. Killing it
+    makes proc.wait() return non-zero, so the caller's retry logic then restarts
+    the session cleanly. We track *time since last output*, not total wall-clock,
+    so a slow-but-active session (streaming events) is never falsely killed.
+    """
     cmd = build_cmd(prompt_text, project_dir, model, max_turns)
     proc = subprocess.Popen(
         cmd,
@@ -410,12 +422,44 @@ def run_session(prompt_text: str, project_dir: Path, model: str, max_turns: int)
         text=True,
         bufsize=1,
     )
+
+    last_output = [time.monotonic()]   # list = mutable cell shared with the watchdog
+    killed_idle = [False]
+    stop_watchdog = threading.Event()
+
+    def watchdog():
+        # Poll a few times per idle window so we react promptly without busy-waiting.
+        interval = max(1, idle_timeout // 10)
+        while not stop_watchdog.wait(interval):
+            if time.monotonic() - last_output[0] > idle_timeout:
+                killed_idle[0] = True
+                print(f"\n⏱  no output for {idle_timeout}s — session appears hung. "
+                      f"Killing it; the retry will restart this session.")
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                return
+
+    wd = None
+    if idle_timeout and idle_timeout > 0:
+        wd = threading.Thread(target=watchdog, daemon=True)
+        wd.start()
+
     try:
         for raw in proc.stdout:  # type: ignore[union-attr]
+            last_output[0] = time.monotonic()
             print_stream_event(raw)
     finally:
+        stop_watchdog.set()
+        if wd is not None:
+            wd.join(timeout=5)
         proc.stdout.close()  # type: ignore[union-attr]
-    return proc.wait()
+    code = proc.wait()
+    # Normalize a watchdog kill to a clearly non-zero code so the retry path fires
+    # even on the off chance the terminated process reports 0.
+    return code if not killed_idle[0] else (code or 124)
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +568,7 @@ def orchestrate(args) -> int:
         # recomputes the same artifact), it is safe to simply retry. We retry
         # with exponential backoff before treating the failure as fatal, so a
         # single hiccup no longer kills a multi-hour run.
-        code = run_session(prompt_text, project_dir, model, args.max_turns)
+        code = run_session(prompt_text, project_dir, model, args.max_turns, args.idle_timeout)
         attempt = 0
         while code != 0 and attempt < args.session_retries:
             attempt += 1
@@ -533,7 +577,7 @@ def orchestrate(args) -> int:
                   f"(likely transient). Retry {attempt}/{args.session_retries} "
                   f"in {backoff}s… State is on disk; this re-runs the same session.")
             time.sleep(backoff)
-            code = run_session(prompt_text, project_dir, model, args.max_turns)
+            code = run_session(prompt_text, project_dir, model, args.max_turns, args.idle_timeout)
 
         if code != 0:
             print(f"\n⚠ session still failing after {args.session_retries} "
@@ -596,6 +640,11 @@ def parse_args(argv=None):
     p.add_argument("--retry-backoff", type=int, default=30,
                    help="Base seconds for exponential backoff between session "
                         "retries (30 → 60 → 120 → 240…). Default: 30.")
+    p.add_argument("--idle-timeout", type=int, default=600,
+                   help="Kill a session that produces NO output for this many "
+                        "seconds (it has hung), so the retry can restart it. "
+                        "Tracks time-since-last-output, not total runtime, so slow "
+                        "but active sessions are safe. Default: 600 (10 min). 0 = off.")
     p.add_argument("--review-every", type=int, default=0,
                    help="Pause for human review every N iterations (0 = never).")
     p.add_argument("--only", default=None,
