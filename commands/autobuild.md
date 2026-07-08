@@ -58,6 +58,7 @@ log para que **sobreviva al cierre del terminal** y no bloquee esta sesión:
 ```bash
 cd ~/claude-dotfiles/harnesses/autonomous-coding
 setsid python3 loop.py --project-dir <PROJECT_DIR> \
+  --notify-email <TU_EMAIL> --notify-every-pass \
   > <PROJECT_DIR>/run.log 2>&1 < /dev/null &
 echo "PID $! — corriendo. Log: <PROJECT_DIR>/run.log"
 ```
@@ -65,6 +66,22 @@ echo "PID $! — corriendo. Log: <PROJECT_DIR>/run.log"
 Sin `--max-iterations`, `--only` ni `--review-every`: **run real, sin límites**. (Si el
 usuario prefiere una primera pasada con freno, ofrécele `--review-every 5` o
 `--max-iterations N`.)
+
+### Notificaciones por email (activadas por defecto arriba)
+
+- `--notify-email` + `--notify-every-pass` → un correo por cada requisito que pasa,
+  más los eventos terminales (fin, escalación, error fatal). Si el usuario prefiere
+  menos ruido, quita `--notify-every-pass` (solo avisa en eventos terminales).
+- **Prerrequisito — credenciales Midway.** El envío usa Amazon SES, que necesita
+  credenciales AWS vigentes. Si han caducado, el harness registra
+  `email notification failed (CredentialRetrievalError … run mwinit)` y **sigue
+  construyendo sin avisar**. Antes de lanzar, recuérdale al usuario correr `mwinit`
+  (interactivo — que lo teclee él con `! mwinit`) si lleva horas sin autenticarse.
+- El `<TU_EMAIL>` debe ser una identidad verificada en SES (sandbox: remitente ==
+  destinatario). Sustitúyelo por el correo del usuario al lanzar.
+- Comprobación opcional de que el correo saldrá (no envía nada de más):
+  `aws ses get-identity-verification-attributes --identities <TU_EMAIL> --region us-east-1`
+  debe devolver `VerificationStatus: Success`.
 
 ## Paso 5 — Entrega los comandos de monitorización e intervención
 
