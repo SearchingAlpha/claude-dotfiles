@@ -14,6 +14,7 @@ Total read: about 90 minutes. Event facts as of 8 Sep 2026; the live site
 | `03-tracks-dossier.md` | 25 | One section per track startup: product loop, what they care about, likely challenge themes, what "great" looks like, Q&A landmines, careers pages. |
 | `04-pitch-and-demo.md` | 15 | The three-minute skeleton for VC and startup judges, demo engineering with a fallback ladder, the four-step Q&A protocol, likely questions. |
 | `05-networking.md` | 15 | Before, during, after. Target list by group, the ask ladder, openers, co-founder fit, follow-up cadence. |
+| `06-team-coherence.md` | 12 | Four people, four local agents, one product: the contract every agent reads, fixtures as schema, the check script, integration owner, four-hour syncs. |
 | `me.md` | 5 | Your intros, story, answer bank, HappyRobot approach. Personal. |
 
 ## Print these (one A4 page each)
@@ -28,6 +29,13 @@ local Chrome; writes `cheatsheets/pdf/*.pdf` and prints the page count). All
 four fit one portrait A4 page as of 8 Sep 2026. If a sheet spills past one
 page, cut text until it doesn't. `npx md-to-pdf` also works but pulls a
 Chromium download.
+
+## Templates for the project repo
+
+`templates/`: `CONTRACT.md`, `AGENTS.md` (symlink `CLAUDE.md` to it),
+`check.sh`, `github-workflow-check.yml`. `/hs-check setup` copies them into
+the team's repo at H1 and fills what the Framing Brief already knows. The
+stack line stays a placeholder until the developers decide at kickoff.
 
 ## Worked example
 
@@ -47,9 +55,13 @@ Installed by `./install.sh` at the repo root (symlinks `commands/*.md` into
 | `/hs-pitch draft` · `/hs-pitch tighten <script>` | H16 and H30 | English draft + Spanish delivery script with timings. |
 | `/hs-judge panel <track>` · `/hs-judge coffee` | Pre-event and H30–H36 | Mock Q&A scoring the four-step protocol. |
 | `/hs-contact <name, company, what we discussed>` | Every night | Log a person, draft the 48h and two-week follow-ups into `contacts.md`. |
+| `/hs-check setup` · `/hs-check review` | H1, then H12 / H20 / H28 | Copy the coherence templates into the project repo; later, run the check and review the diff for drift against the contract. |
 
-## Starter code
+## Starter code: a sandbox, not the stack
 
 The Python scaffold one level up (`agent.py`, `llm.py`, `search.py`,
 `media.py`, `app.py`) wires Claude, Exa and fal.ai with a Streamlit front end.
-Run the four smoke tests before Friday; see `../README.md`.
+It exists so the sponsor APIs are proven before Friday and so model logic can
+be prototyped fast. **The product stack is the developers' decision at
+kickoff** (playbook 06). Run the four smoke tests before Friday; see
+`../README.md`.

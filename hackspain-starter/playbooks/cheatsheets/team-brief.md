@@ -10,7 +10,8 @@ disagree.
   "what do we show if we present now?" Also the data/ML logic if the challenge
   has a modelling core.
 - **Devs — the stack, the architecture, the code.** You call the technical
-  shots.
+  shots. **Stack: [team decision at kickoff].**
+- **Integration owner: [name].** Merges, keeps main green, runs `./check.sh`.
 - **Demo laptop owner: [name].** Everything runs there by H24.
 
 ## Timeline (H0 = challenges announced)
@@ -35,6 +36,15 @@ disagree.
 6. Stuck 30 minutes? Ask a mentor. Not three hours.
 7. Sleep: one 3–4 hour block each, staggered, agreed at H12. Nobody codes
    past 20 hours awake.
+
+## Four agents, one product
+
+`CONTRACT.md` is the shared brain: one-liner, demo moment, schema, interfaces,
+ownership, NOT list. Every agent reads it via `AGENTS.md` / `CLAUDE.md`.
+`fixtures/` is the canonical schema and the demo data. `./check.sh` runs the
+golden path; run it before every merge and before telling your agent "done".
+Branch per person, merge every 2h; after H20 only the integration owner
+merges. One module per person; shared files change by announcement first.
 
 ## When the coding agent loops
 

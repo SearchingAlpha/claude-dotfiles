@@ -83,6 +83,7 @@ cd ~/claude-dotfiles
 | `/hs-pitch` | HackSpain: `draft` genera borrador EN + guion de entrega ES de 3 min con tiempos; `tighten` afina un guion pegado. |
 | `/hs-judge` | HackSpain: Q&A simulado (`panel` rota personas VC/operador, `coffee` una pregunta abierta tipo FDE) puntuando el protocolo de 4 pasos. |
 | `/hs-contact` | HackSpain: registra a una persona en `contacts.md` y redacta los follow-ups de 48h y 2 semanas. |
+| `/hs-check` | HackSpain: `setup` copia las plantillas de coherencia (CONTRACT.md, AGENTS.md, check.sh, CI) al repo del proyecto; `review` pasa el check y revisa el diff contra el contrato. |
 
 Los comandos `hs-*` leen su playbook en `hackspain-starter/playbooks/` antes de actuar; ver
 `hackspain-starter/playbooks/README.md`. Están escritos en inglés.

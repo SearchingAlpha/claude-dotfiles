@@ -2,8 +2,10 @@
 
 Esqueleto para llegar al hackathon con la curva de aprendizaje ya hecha en las
 tres herramientas sponsor: **Claude** (LLM/razonamiento), **Exa** (búsqueda/RAG)
-y **fal.ai** (generación de imágenes). Todo en Python, pensado para escribir
-encima con **Cursor**.
+y **fal.ai** (generación de imágenes). Está en Python porque es el *sandbox* de
+Pablo para probar las APIs y prototipar lógica de modelo; **el stack del
+producto lo decide el equipo en el kickoff** (ver `playbooks/06-team-coherence.md`).
+Sirve igual desde Cursor, Claude Code o una terminal.
 
 La idea: el día 1 no pierdes horas peleándote con SDKs ni con boilerplate. Pones
 tus claves, verificas que las tres herramientas responden, y a construir tu idea.

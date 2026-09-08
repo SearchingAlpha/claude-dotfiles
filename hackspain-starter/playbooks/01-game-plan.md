@@ -33,8 +33,12 @@ usually welcome someone taking this off their plate. What you own:
   anomaly detection, scoring, matching). You own the model logic; the devs
   own the plumbing around it.
 
-What you don't own: the stack, the repo layout, code review. Don't
-second-guess developers on their turf. Do challenge them on scope, every time.
+What you don't own: the stack, the repo layout, code review. **The stack is a
+team decision at kickoff**; the Python sandbox in `hackspain-starter/` is
+yours for proving APIs and prototyping model logic, not a default for the
+product. Don't second-guess developers on their turf. Do challenge them on
+scope, every time. How four people with four agents stay one product is
+playbook 06.
 
 The translation from your day job: weekly deep dive → impact → present to
 leadership. A VC panel is leadership with a different vocabulary. A startup
@@ -49,7 +53,7 @@ open. Adjust the hours to the real agenda on Friday, keep the order.
 | Hour | Checkpoint | You |
 |---|---|---|
 | H0–H1 | **Kickoff** (run `kickoff-60`). Team created in the CLI, tracks registered, project draft saved, first commit, `milestone add firstCommit`. | Facilitate. Claim the role. |
-| H1–H3 | **Frame.** Framing Brief agreed (playbook 02, `/hs-frame`). Devs scaffold on the starter kit. Demo laptop chosen. | Write the problem paragraph and the impact formula. Book a mentor for H3–H4. |
+| H1–H3 | **Frame.** Framing Brief agreed (playbook 02, `/hs-frame`). Devs pick the stack and scaffold; the integration owner sets up the repo with `/hs-check setup` (playbook 06). H2: fixtures and interfaces frozen. Demo laptop chosen. | Write the problem paragraph and the impact formula. Own the fixtures. Book a mentor for H3–H4. |
 | H3–H12 | **Tracer bullet.** Thinnest end-to-end path: input → one step of logic → visible output. Ugly, hardcoded, fake data fine. `milestone add firstBuild` when it runs; `firstDemo` when the demo moment shows end to end. | Build the demo dataset. First venue post. Every 4h: "what do we show now?" |
 | H12–H24 | **Build up**, in order of demo impact. Nothing that isn't visible in the demo moment. | `/hs-pitch draft` at ~H16 and show the team; it realigns priorities. Collect real numbers. Talk to mentors during the day. |
 | **H24** | **FEATURE FREEZE.** Non-negotiable. From here: bugs on the golden path, demo data, polish of what the judge will see. | Announce it. Hold the line at H26 when someone has "a quick idea". |
