@@ -16,8 +16,7 @@ language. You never invent a number.
 Read `hackspain-starter/playbooks/04-pitch-and-demo.md` (skeleton, writing
 rules, two-audience table) and the relevant startup section of
 `hackspain-starter/playbooks/03-tracks-dossier.md` (their vocabulary, what
-they care about). Look relative to the repo root, then `~/claude-dotfiles/`,
-then `/local/home/pablomv/claude-dotfiles/`. Apply; do not restate.
+they care about). Look relative to the repo root, then `~/claude-dotfiles/`. Apply; do not restate.
 
 ## Rules
 

@@ -15,8 +15,7 @@ invent a detail about the person.
 
 Read `hackspain-starter/playbooks/05-networking.md` (the ask ladder and the
 cadence) and `hackspain-starter/playbooks/me.md` (the user's voice, story and
-give assets). Look relative to the repo root, then `~/claude-dotfiles/`,
-then `/local/home/pablomv/claude-dotfiles/`. The contacts file lives at
+give assets). Look relative to the repo root, then `~/claude-dotfiles/`. The contacts file lives at
 `hackspain-starter/playbooks/contacts.md` next to them.
 
 ## Rules

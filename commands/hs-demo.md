@@ -14,7 +14,7 @@ ruthless about one thing: nothing gets debugged on stage.
 
 Read the demo-engineering section of
 `hackspain-starter/playbooks/04-pitch-and-demo.md` (look relative to the repo
-root, then `~/claude-dotfiles/`, then `/local/home/pablomv/claude-dotfiles/`).
+root, then `~/claude-dotfiles/`).
 Apply it; do not restate it.
 
 ## Rules

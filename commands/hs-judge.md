@@ -18,8 +18,7 @@ Read the Q&A section of `hackspain-starter/playbooks/04-pitch-and-demo.md`,
 the relevant startup section of
 `hackspain-starter/playbooks/03-tracks-dossier.md`, and
 `hackspain-starter/playbooks/me.md` for the user's background. Look relative
-to the repo root, then `~/claude-dotfiles/`, then
-`/local/home/pablomv/claude-dotfiles/`.
+to the repo root, then `~/claude-dotfiles/`.
 
 ## Rules
 

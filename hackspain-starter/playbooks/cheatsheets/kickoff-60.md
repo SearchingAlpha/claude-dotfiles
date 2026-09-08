@@ -18,7 +18,7 @@ Facilitator card. Run it cold. You facilitate, you don't decide alone.
 | 15–30 | Diverge: five or more ideas, one line each, no "how", no debate. Prompts: obvious automation · control tower · exception handler · copilot · data product · our-domain wedge · contrarian. | Idea list |
 | 30–40 | Score 1–5: Impact · Demoable in 30h · Track fit · Team fit. Kill anything at 2 or below on Demoable. Dot-vote the top two. You propose, the team confirms. | Chosen idea |
 | 40–50 | Lock: one-liner · demo moment ("judge does X, sees Y in N seconds, today takes Z") · tracer bullet (input → step → output, what's faked) · NOT-doing list of five · roles. Paste the Framing Brief in chat and pin it. | Framing Brief |
-| 50–60 | `hackspain team create <name>` and share the join code · `track register <slug>` · `team repo <url>` · `stack set …` · `submit --draft` with name and two-line description · first commit · `milestone add firstCommit` · `watch` running on one machine. | Team on the board |
+| 50–60 | `hackspain team create <name>` and share the join code · `track list` then `track register <slug>` · `team repo <url>` · `stack set …` · `submit --draft` with name and two-line description · first commit · `milestone add firstCommit` · `watch` running on one machine. | Team on the board |
 
 **Stuck at minute 40?** Take the idea with the highest Demoable score. Speed
 beats optimal. You can re-scope at H3 with a mentor.

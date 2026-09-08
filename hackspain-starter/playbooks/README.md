@@ -29,6 +29,12 @@ four fit one portrait A4 page as of 8 Sep 2026. If a sheet spills past one
 page, cut text until it doesn't. `npx md-to-pdf` also works but pulls a
 Chromium download.
 
+## Worked example
+
+`examples/framing-brief-sample.md`: what `/hs-frame` produced on a fictional
+Embat-style challenge during a pre-event dry run. Read it once to calibrate
+the density a good brief has.
+
 ## Slash commands for live use
 
 Installed by `./install.sh` at the repo root (symlinks `commands/*.md` into
