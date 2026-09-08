@@ -104,6 +104,14 @@ Say "roughly" and show the formula.
   agent to production, runs supply-chain operations at scale, forecasting and
   data.
 
+## Duplicate check at H2
+
+Run `hackspain project list`. Every team's project name, tracks and stack are
+visible to everyone by design. If another team is building your wedge in your
+track, either differentiate (a different persona, a different demo moment) or
+switch to your second-scored idea now. Two teams with the same demo split the
+judge's attention; the one with the sharper business story wins.
+
 ## Track-entry rule
 
 One primary track. Add a second only if the same demo genuinely serves it

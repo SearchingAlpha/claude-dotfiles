@@ -89,7 +89,10 @@ Never: pitch a VC your job search, ask for a job at a stand, hand anyone a CV.
 `hackspain watch` puts your team on the venue board; `hackspain post` puts
 your one-liner and screenshots in everyone's feed. Four posts over the weekend
 mean people come to you already knowing what you're building. When you meet
-someone from the board, you already have the opener.
+someone from the board, you already have the opener. `hackspain team list`
+shows every team's stack and tracks: "you're on Convex too, how's it going?"
+is an opener, and a team whose commits stopped three hours ago is a team you
+can help.
 
 ### Making friends, concretely
 

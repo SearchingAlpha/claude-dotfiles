@@ -25,7 +25,8 @@ beats optimal. You can re-scope at H3 with a mentor.
 
 **Your job right after H1:** write the problem paragraph and the impact
 formula while the devs scaffold. Run `/hs-frame` with the challenge text to
-pressure-test the brief. Book a mentor for H3–H4.
+pressure-test the brief. At H2 run `hackspain project list` for duplicate
+ideas in your track. Book a mentor for H3–H4.
 
 **Watch for:** an idea chosen because it's technically fun · a demo moment
 nobody can say in one sentence · two people on the same task · nobody owning

@@ -84,6 +84,14 @@ Organisers and other teams see a live board at the venue. Use it.
   the team on the live board organisers use to see who is shipping, and pushes
   announcements (lunch, judging slots, schedule changes) as desktop
   notifications. Only usage counts leave the machine, never code or prompts.
+  The board and the token/commit dashboards are labelled by the organisers as
+  **activity volume, not jury score**. Don't optimise for them; use them for
+  visibility and announcements only.
+- **Scouting is built in and fair.** `hackspain project list` and
+  `hackspain team list` show every team's project name, tracks, repo URL,
+  demo URL and tech stack; the feed streams everyone's commits within minutes.
+  Run `project list` at H2 (is someone building your wedge in your track?
+  differentiate or switch) and at H12 (who is stuck and could use help).
 - **Milestones early**: `firstCommit` at H1, `firstBuild` when it runs,
   `firstDemo` when the tracer bullet works. Then custom ones as
   micro-marketing: `hackspain milestone add custom --label "First real
@@ -95,8 +103,12 @@ Organisers and other teams see a live board at the venue. Use it.
   pitch.
 - **`hackspain team repo <url>`** so GitHub pushes show on the feed, and
   **`hackspain stack set …`** with the real stack.
-- **`hackspain perk list`** on Friday: partner credits (Claude, Exa, fal.ai,
-  Cursor and others). Decide which you use; you declare them in the submission.
+- **`hackspain perk list`** on Friday: partner credits (Cursor, Exa, fal.ai and
+  others), claimed in-app, one code per person per perk. Decide which you use;
+  you declare them in the submission. Sponsor APIs go through a proxy at
+  api.hackspain.com; the site source hints at more providers behind it than
+  the announced ones (unannounced as of 8 Sep, may change), so check the list
+  on Friday before the devs pick a model stack.
 
 ## Submission checklist (H30)
 
