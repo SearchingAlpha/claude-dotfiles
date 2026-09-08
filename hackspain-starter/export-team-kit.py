@@ -50,6 +50,8 @@ GLOBAL_RULES = [
      "Notes, sources and the funds: `../people-notes.md`.", "people-card pointer"),
     (r"Personal context and approach live in `me\.md`\.[^\n]*\n[^\n]*\n[^\n]*\n", "", "me.md pointer"),
     (r"\(ver `playbooks/06-team-coherence\.md`\)", "(ver `../kit/playbooks/06-team-coherence.md`)", "sandbox readme"),
+    (r"(?s)└── playbooks/.*?cheatsheets/[^\n]*\n",
+     "└── (los playbooks del equipo están en ../kit/)\n", "sandbox readme tree"),
 ]
 
 def apply_rules(text, path):
