@@ -33,6 +33,8 @@ GLOBAL_RULES = [
     (r"`hackspain-starter/`", "`sandbox/`", "sandbox path"),
     (r"~/claude-dotfiles/", "~/hackspain26-team-kit/", "fallback path"),
     (r"(?s)\*\*Your angle\.\*\*.*?\n\n", "", "dossier angle paragraph (private)"),
+    (r"(?s)\*\*Careers\.\*\*.*?\n\n", "", "dossier careers paragraphs (private)"),
+    (r"FDE-style", "consulting-style", "hs-judge coffee wording"),
     (r"Stated\s+assumptions are exactly the signal FDE and deployment roles hire for\.",
      "Stated assumptions are what senior operators listen for.", "FDE hiring tell"),
     (r"the people and careers lines are your openers and your warm\s+application path\.",
