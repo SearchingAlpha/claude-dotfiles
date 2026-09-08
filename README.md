@@ -10,8 +10,10 @@ y se replican al directorio de usuario de Claude Code mediante scripts de instal
 
 ```
 claude-dotfiles/
-├── commands/                    # slash commands (resolver.md, ...)
-├── skills/                      # skills generales — se commitean a GitHub
+├── commands/                    # slash commands (resolver, autobuild, builds, post, hs-*)
+├── hackspain-starter/           # kit HackSpain 2026: scaffold Python + playbooks + cheat sheets
+├── harnesses/autonomous-coding/ # harness de 3 agentes (se ejecuta in-place, no lo instala install.sh)
+├── skills/                      # skills generales
 │   ├── grilling/
 │   ├── grill-me/
 │   ├── writing-great-skills/
@@ -33,10 +35,13 @@ claude-dotfiles/
 
 ### skills/ vs skills-amazon/
 
-| Carpeta | ¿En GitHub? | Contenido |
+| Carpeta | ¿En el repo? | Contenido |
 |---|---|---|
 | `skills/` | Sí | Skills generales y de ingeniería (fuente: mattpocock/skills) |
 | `skills-amazon/` | No (gitignored) | Skills con referencias a sistemas internos Amazon |
+
+El repo es **privado** desde el 8 de septiembre de 2026 (contiene material personal
+en `hackspain-starter/playbooks/`). `skills-amazon/` sigue fuera de git igualmente.
 
 ## Instalación
 
@@ -70,6 +75,17 @@ cd ~/claude-dotfiles
 | Comando | Descripción |
 |---|---|
 | `/resolver` | Protocolo de resolución de problemas con IA: clasifica el tipo, ejecuta los 7 pasos con mapeo humano↔LLM, e incluye verificación adversarial contra sycophancy. |
+| `/autobuild` | Lanza el harness autónomo de 3 agentes (Planner / Generator / Evaluator) sobre una spec. |
+| `/builds` | Dashboard de solo lectura de las sesiones del harness. |
+| `/post` | Bucle de contenido "Show Your Work" para LinkedIn/X sobre el vault de Obsidian. Un paso por invocación. |
+| `/hs-frame` | HackSpain, hora 1: del texto del reto a un Framing Brief (one-liner, demo moment, tracer bullet, impacto, tracks). Sin código. |
+| `/hs-demo` | HackSpain: guion de demo con golden path, pre-warm, escalera de fallback y reparto driver/narrador. |
+| `/hs-pitch` | HackSpain: `draft` genera borrador EN + guion de entrega ES de 3 min con tiempos; `tighten` afina un guion pegado. |
+| `/hs-judge` | HackSpain: Q&A simulado (`panel` rota personas VC/operador, `coffee` una pregunta abierta tipo FDE) puntuando el protocolo de 4 pasos. |
+| `/hs-contact` | HackSpain: registra a una persona en `contacts.md` y redacta los follow-ups de 48h y 2 semanas. |
+
+Los comandos `hs-*` leen su playbook en `hackspain-starter/playbooks/` antes de actuar; ver
+`hackspain-starter/playbooks/README.md`. Están escritos en inglés.
 
 ## Skills disponibles
 

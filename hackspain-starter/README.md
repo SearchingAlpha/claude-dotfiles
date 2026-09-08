@@ -20,9 +20,15 @@ hackspain-starter/
 ├── app.py           # demo web Streamlit (4 pestañas)
 ├── requirements.txt
 ├── .env.example     # copia a .env y rellena claves
-└── playbooks/
-    ├── cursor-playbook.md      # flujo con Cursor + cómo desatascar al agente cuando entra en bucle
-    └── hackathon-playbook.md   # plan de 36h, roles, y cómo NO quedarte en blanco (pitch + casos abiertos)
+└── playbooks/                  # kit de preparación (en inglés) — empieza por playbooks/README.md
+    ├── 01-game-plan.md         # objetivos, tu rol, timeline 36h con checkpoints, CLI hackspain, submission
+    ├── 02-challenge-framing.md # horas 1–3: del reto al Framing Brief
+    ├── 03-tracks-dossier.md    # una sección por startup del track
+    ├── 04-pitch-and-demo.md    # pitch 3 min para VCs + jueces de startup, demo, Q&A de 4 pasos
+    ├── 05-networking.md        # antes / durante / después, lista de personas, ask ladder
+    ├── me.md                   # intros de 20s, historia, banco de respuestas (personal)
+    ├── contacts.md             # lo rellena /hs-contact
+    └── cheatsheets/            # A4 imprimibles: kickoff-60, team-brief, pitch-card, people-card
 ```
 
 ## Arranque (5 minutos)
@@ -80,6 +86,7 @@ streamlit run app.py
   si quieres más calidad para la demo final.
 - **Nunca subas `.env`** — ya está en `.gitignore`. Las claves van solo en local.
 
-> Este kit vive dentro de `claude-dotfiles`, que se sincroniza con GitHub. El
-> `.gitignore` de esta carpeta excluye `.env` y las imágenes generadas; el código
-> es genérico y no tiene nada de Amazon, así que es seguro que se suba.
+> Este kit vive dentro de `claude-dotfiles`, un repo **privado** desde el 8 de
+> septiembre de 2026 porque `playbooks/` contiene material personal. El
+> `.gitignore` de esta carpeta excluye `.env` y las imágenes generadas igualmente.
+> Los slash commands `/hs-*` que acompañan al kit están en `../commands/`.
