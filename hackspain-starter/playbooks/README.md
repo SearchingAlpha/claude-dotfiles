@@ -37,6 +37,15 @@ Chromium download.
 the team's repo at H1 and fills what the Framing Brief already knows. The
 stack line stays a placeholder until the developers decide at kickoff.
 
+## Sharing with the team
+
+This repo stays private. `python3 hackspain-starter/export-team-kit.py` builds
+a curated team edition in `~/hackspain26-team-kit/` (playbooks 01–04 and 06,
+cheat sheets, templates, commands except `/hs-contact`, public people notes,
+the sandbox) with personal sentences rewritten and `me.md`, `contacts.md` and
+`05-networking.md` left out. Re-run after changes, then commit and push in
+that repo. Teammates' PRs land there and get ported back here by hand.
+
 ## Worked example
 
 `examples/framing-brief-sample.md`: what `/hs-frame` produced on a fictional
