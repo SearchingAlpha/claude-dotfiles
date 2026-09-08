@@ -32,7 +32,11 @@ GLOBAL_RULES = [
     (r"hackspain-starter/playbooks/", "kit/playbooks/", "kit path"),
     (r"`hackspain-starter/`", "`sandbox/`", "sandbox path"),
     (r"~/claude-dotfiles/", "~/hackspain26-team-kit/", "fallback path"),
-    (r"\*\*Your angle\.\*\*", "**Pablo's angle (CPO).**", "dossier angle"),
+    (r"(?s)\*\*Your angle\.\*\*.*?\n\n", "", "dossier angle paragraph (private)"),
+    (r"Stated\s+assumptions are exactly the signal FDE and deployment roles hire for\.",
+     "Stated assumptions are what senior operators listen for.", "FDE hiring tell"),
+    (r"the people and careers lines are your openers and your warm\s+application path\.",
+     "the people and careers lines are your openers.", "warm application tell"),
     (r"Yours: shipped an AI", "Pablo's: shipped an AI", "why-us line"),
     (r"Claim it in the first two minutes \(script in `kickoff-60`\)\. Strong developers\s+"
      r"usually welcome someone taking this off their plate\. What you own:",
