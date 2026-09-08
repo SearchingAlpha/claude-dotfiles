@@ -56,9 +56,12 @@ What are you working on now?" Honest, forward-looking, no bitterness.
 
 ## HappyRobot: context and approach
 
-- June 2026: technical round, not selected. Quili Peña from HappyRobot is on
-  the general judging panel; HappyRobot runs a track and will have people at
-  a table.
+- June 2026: technical round, not selected. Quili Peña (Head of Strategy &
+  Operations / Chief of Staff, ex Blackstone and Goldman) is on the general
+  judging panel; Juan Vecino, also listed as a judge, shows Strategy & Ops at
+  HappyRobot on LinkedIn. HappyRobot runs a track and will have people at a
+  table. They are hiring Forward Deployed Engineers and Deployment
+  Strategists in Madrid (links in playbook 03).
 - Don't lead with the interview at the table. Lead with the demo, the
   challenge, and freight domain knowledge. Mention the interview only
   one-to-one, framed as above, if it comes up.

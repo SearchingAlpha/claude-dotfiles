@@ -140,3 +140,120 @@ If a startup judge liked the project, the follow-up is a warm application:
 "We built X for your challenge, here's the repo. I'd love 20 minutes to
 understand how your deployment team works." Careers pages for all five track
 startups are in playbook 03.
+
+---
+
+## Appendix — people notes and sources
+
+Researched 8 Sep 2026 from fund and company team pages, personal sites,
+GitHub, the Exponential Fellowship directory and press. Public professional
+information only. The compact version is `cheatsheets/people-card.md`.
+
+### Grand-prize judges
+
+- **Jaime Novoa, Partner, Kfund.** Former tech journalist; leads Kfund's
+  communications and sits on the investment team; partner since Feb 2024.
+  Founded Novobrief (2014) and writes the weekly Dealflow.es newsletter
+  (~10k subscribers) on Spanish rounds, exits and funds; a recent issue led
+  with HappyRobot's Series C. kfund.vc/team · dealflow.es
+- **Iván Landabaso, Partner, JME Ventures.** Seed investor (€100k–3M tickets,
+  Spain); 3+ years at Facebook before. Writes Startup Riders (25k+
+  subscribers): growth deep-dives on Oura, Suno, Gamma, n8n, Synthesia, Ramp.
+  jme.vc · startupriders.com/about
+- **Miguel González, Senior Investor, Acurio Ventures.** Early stage at the
+  Bilbao-founded fund formerly All Iron Ventures. Before: M&A and IPO
+  advisory at AZ Capital; double degree Business + Industrial Engineering
+  (Deusto). acurio.vc/team
+- **Iván Fernández, Founding Partner, Enzo Ventures.** Co-founded the
+  pre-seed fund with Edgar Vicente; 30+ operating partners; both founders on
+  Forbes 30 Under 30 Europe 2022. Portfolio: Orbio, Murphy, Rever, Harbiz,
+  Complaion. enzoventures.eu/team
+- **Ignacio Alfeirán, Investment Analyst, Kibo Ventures** (since Jan 2026).
+  Kibo leads pre-A and Series A (€2–6M first cheques), B2B deep tech, AI,
+  cyber; Fund IV €120M; recent: NeuralTrust, Zynap, THEKER Robotics,
+  Anyformat. kiboventures.com/team
+
+### General judges
+
+- **Quili Peña, HappyRobot.** Two public titles: Head of Strategy &
+  Operations (Nov 2025 press on the DHL Supply Chain deployment) and Chief of
+  Staff (Exponential directory). Ex Blackstone, Capchase, Portobello, Goldman
+  Sachs; ICADE. goexponential.org/directory/fellows/quili-pena
+- **Alejandro Buján, AI Lead, Base10 Partners** (since May 2026). Ex
+  full-stack at Invofox (YC S22); CS at A Coruña; Exponential Fellow. Won
+  HackUPC 2025's InditexTech track; published at SPLC '24.
+  alejandrobujan.com
+- **Adrià Blancafort, Harbor `[unverified]`.** GitHub lists Factorial.
+  Maintains phoneflow ("The Open Source Voice Agent Platform"), a real-time
+  voice agent for software demos, and an LLM-from-scratch script. First place
+  HackUPC 2025 (TripMates). UPC Data Science. github.com/adriablancafort
+- **Juan Vecino, Harbor `[unverified]`.** LinkedIn headline: "S&O at
+  HappyRobot | ex-PE". Background in private equity and consulting.
+- **Pablo Menéndez, Harbor `[unverified]`.** No public profile matched. Ask.
+- **Félix Gil, Krea.** Engineer-designer; built Krea's first iOS app.
+  Freelance design before for Nike, Adidas, New Balance, EA FIFA, Real
+  Madrid. Exponential Fellow. felixgil.es
+- **Nicolás de Ory, Caspian.** Backend, AI and distributed systems at an AI
+  trade-compliance and duty-drawback platform (customs data reconciliation,
+  refund claims with US CBP). Ex Homa, PlayPlay. Open-source author.
+  goexponential.org/directory/startups/caspian
+- **María Muñoz, Founding Engineer, Invoke Bio** (PearX S26; Pear, NFX,
+  HCVC). ML on tumor biopsies to predict neoantigens for individualised
+  immunotherapy; used at Stanford Medicine and UCSD. invoke.bio
+
+**Read across the general panel:** young, technical, several are recent
+hackathon winners themselves, two are from HappyRobot's orbit. They will
+look at the code and ask what's real. Treat them as peers, not gatekeepers.
+
+### Mentors
+
+- **Maex Ament, Co-founder & CEO, Causa Prima.** Agent-to-agent network for
+  finance teams (AP/AR, disputes, discount capture); backed by K Fund,
+  Creandum, Borusan. Co-founded Taulia (2009, ~$250M raised, acquired by SAP
+  in 2022) and Centrifuge; ex SAP engineer. The "150+ angel investments"
+  figure is the event's `[unverified]`. causaprima.ai · Altar.io podcast.
+- **Miguel Carranza, Co-founder & CTO, RevenueCat.** Subscription
+  infrastructure, 2B+ API requests a day, OpenAI among customers. Annual "My
+  role as a founder CTO" essays (Year Seven: two reorgs, "shipping is king").
+  miguelcarranza.es/cto-year-7
+- **Joan Rodríguez, Founder, Quiver AI.** First-authored StarVector (SVG
+  generation), which became Quiver: models that output editable vector
+  graphics; API and MCP server; partners Rive, Linearity, ComfyUI. $8.3M
+  seed led by a16z (Feb 2026) with K Fund and JME. quiver.ai/blog
+- **Kintxo Cortés, Product Partnerships & Expansion, Gigs** (YC W21; embedded
+  telecom behind Revolut, Klarna, Cash App, Nubank plans). Ex Airbnb,
+  Shopify, Trade Republic; Accel Scout and angel. gigs.com
+- **David Gomes, SpaceX `[unverified]`; ex Cursor, Neon, SingleStore.** Talks
+  on how Cursor's worktrees and best-of-n were built; MCP server design; AI
+  Engineer 2026; "Primer: Worktrees + Coding Agents". davidgomes.com/speaking
+- **Guillermo García Cobo, ex NVIDIA.** Joined 2024 (Fulbright) at the
+  intersection of generative AI and autonomous driving; co-author of "NVIDIA
+  OmniDreams" (arXiv, June 2026), a real-time generative world model for
+  closed-loop AV simulation. "Stealth" is the event's word. arxiv.org/abs/2606.03159
+- **Mark Villacampa, Senior Software Developer, RevenueCat.** SDKs;
+  RubyMotion-era open source; NSSpain 2023 talk on paywalls.
+  github.com/MarkVillacampa
+
+### The funds
+
+- **Kfund**: Southern Europe, pre-seed (K Founders) upward, €100k–10M, broad
+  thesis; HappyRobot, Abacum, Quiver, Arengu (exit to Okta).
+- **JME Ventures**: Spanish seed specialist, €100k–3M, 70+ companies, €120M
+  AUM, Fund IV 2024; Flywire, Jobandtalent, Genially, Quiver.
+- **Acurio Ventures**: seed and Series A across Europe, sector-agnostic,
+  usually co-invests, can lead; Exoticca, Indexa, Lingokids, Seedtag, Preply.
+- **Enzo Ventures**: pre-seed only, Southern European first-time founders,
+  operating-partner network. The fund to pitch a team, not traction.
+- **Kibo Ventures**: leads pre-A and A, €2–6M for 10–20%, B2B deep tech, AI,
+  cyber; exits Flywire (IPO), Vilynx (Apple), Onum (CrowdStrike).
+- **Base10 Partners** (SF): "Automation for the Real Economy", seed to growth,
+  $2.6B AUM after an $850M close (June 2026); Nubank, Figma, Brex, Notion; led
+  HappyRobot's Series B.
+
+### Unverified, as of 8 Sep 2026
+
+Which "Harbor" the three general judges belong to (no public company
+matched; Blancafort's GitHub says Factorial, Vecino's LinkedIn says
+HappyRobot; possibly a new venture). Pablo Menéndez's role. David Gomes at
+SpaceX (only the event roster and a LinkedIn snippet). Guillermo García
+Cobo's stealth venture. Maex Ament's angel count. Ask, don't assume.

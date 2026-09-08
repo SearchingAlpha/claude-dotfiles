@@ -7,7 +7,7 @@ judging-slot announcement. `/hs-pitch` drafts and tightens the script,
 
 ## Two audiences, one story
 
-The grand-prize panel is five VC partners. The track panels include operators
+The grand-prize panel is five investors from Spanish VC funds (two partners, a founding partner, a senior investor and an analyst). The track panels include operators
 from the startup itself. Each slot of the pitch has to land with both.
 
 | Slot | The VC partner listens for | The startup judge listens for |
