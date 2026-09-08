@@ -23,8 +23,11 @@ Total read: about 90 minutes. Event facts as of 8 Sep 2026; the live site
 - `cheatsheets/pitch-card.md`: by the laptop from H30.
 - `cheatsheets/people-card.md`: names, hooks and openers for judges and mentors.
 
-Render to PDF with `npx md-to-pdf <file>` or the VS Code "Markdown PDF"
-extension. If a sheet spills past one page, cut until it doesn't.
+Render to PDF with `python3 cheatsheets/render.py` (markdown-it-py plus a
+local Chrome; writes `cheatsheets/pdf/*.pdf` and prints the page count). All
+four fit one portrait A4 page as of 8 Sep 2026. If a sheet spills past one
+page, cut text until it doesn't. `npx md-to-pdf` also works but pulls a
+Chromium download.
 
 ## Slash commands for live use
 

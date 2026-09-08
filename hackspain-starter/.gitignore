@@ -14,3 +14,6 @@ outputs/
 *.png
 *.jpg
 !**/assets/**
+
+# rendered cheat sheets (python3 playbooks/cheatsheets/render.py)
+playbooks/cheatsheets/pdf/
