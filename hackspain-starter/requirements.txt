@@ -1,0 +1,6 @@
+# Núcleo del starter-kit
+anthropic>=0.116        # Claude. Para Bedrock: pip install "anthropic[bedrock]"; para AWS: "anthropic[aws]"
+exa-py>=1.9             # búsqueda neural / RAG
+fal-client>=0.5         # generación de imágenes/vídeo
+python-dotenv>=1.0      # carga .env
+streamlit>=1.30         # demo web de un archivo (app.py)
