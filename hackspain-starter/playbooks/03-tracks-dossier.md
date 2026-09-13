@@ -46,6 +46,18 @@ pays and why now.
 - Networking: the people and careers lines are your openers and your warm
   application path.
 
+## Claves confirmadas desde el repositorio oficial (HackSpain/hackspain26)
+
+- **Tracks confirmados y retirados:** El backend Convex (`tracks.ts`) retira explícitamente cualquier track genérico (`const RETIRED_SLUGS = ["ml", "non-tech"]`). Los **únicos 5 tracks** son Maisa, HappyRobot, Prosper AI, Embat y THEKER.
+- **Nuevos jueces añadidos al panel general:**
+  - Marta Santiago (Autonomous Alliance, Inc)
+  - Xabier Irizar (Canopy Labs)
+  - Alejandro Cañada Hinojosa (Sperid Labs)
+  - Se suman a Quili Peña (HappyRobot), Alejandro Buján (Base10), Adrià Blancafort / Juan Vecino / Pablo Menéndez (Harbor), Félix Gil (Krea), Nicolás de Ory (Caspian) y María Muñoz (Invoke.bio).
+- **Panel VCs Gran Premio (5.000 €):** Jaime Novoa (Kfund), Iván Landabaso (JME), Miguel González (Acurio), Iván Fernández (Enzo), Ignacio Alfeirán (Kibo).
+- **Sponsors de Compute / Partners oficiales (`llms.txt`):** Google, Cognition (Devin), Cursor, fal.ai, UPM, Exponential. Google y Gemini tienen presencia destacada; el starter kit soporta Gemini y proxies vía `OPENAI_API_KEY` / `GEMINI_API_KEY`.
+- **Telemetría oficial (`hackspain watch`):** Monitorea logs locales de `claude-code`, `codex`, `opencode` y `cline`. Los hitos oficiales validados en base de datos son: `firstCommit`, `firstBuild`, `firstDemo` y `custom` (--label <= 120 caracteres).
+
 ---
 ## Maisa — "AI agents with traceability for the enterprise"
 

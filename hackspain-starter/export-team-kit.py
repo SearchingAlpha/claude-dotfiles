@@ -20,10 +20,11 @@ TARGET = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "~/hackspain26-team-
 PLAYBOOKS = ["01-game-plan.md", "02-challenge-framing.md", "03-tracks-dossier.md",
              "04-pitch-and-demo.md", "06-team-coherence.md"]
 CHEATSHEETS = ["kickoff-60.md", "team-brief.md", "pitch-card.md", "people-card.md", "render.py"]
-TEMPLATES = ["CONTRACT.md", "AGENTS.md", "check.sh", "github-workflow-check.yml"]
+TEMPLATES = ["CONTRACT.md", "AGENTS.md", "check.sh", "check.py", "github-workflow-check.yml"]
 EXAMPLES = ["framing-brief-sample.md"]
 COMMANDS = ["hs-frame.md", "hs-demo.md", "hs-pitch.md", "hs-judge.md", "hs-check.md"]
 SANDBOX = ["agent.py", "app.py", "config.py", "llm.py", "media.py", "search.py",
+           "trace.py", "harness.py", "repomap.py", "hackspain_cli.py",
            "requirements.txt", ".env.example", ".gitignore", "README.md"]
 
 # (regex, replacement, description) applied to every exported text file.

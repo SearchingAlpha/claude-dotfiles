@@ -1,5 +1,6 @@
 # Núcleo del starter-kit
 anthropic>=0.116        # Claude. Para Bedrock: pip install "anthropic[bedrock]"; para AWS: "anthropic[aws]"
+openai>=1.0             # opcional: para Google Gemini, OpenAI o proxy HackSpain (api.hackspain.com)
 exa-py>=1.9             # búsqueda neural / RAG
 fal-client>=0.5         # generación de imágenes/vídeo
 python-dotenv>=1.0      # carga .env

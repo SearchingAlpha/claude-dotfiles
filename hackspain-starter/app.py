@@ -8,20 +8,22 @@ enseñar en 5 minutos y a partir de ahí construyas tu idea encima.
 import streamlit as st
 
 import agent
+import config
 import llm
 import media
 import search
+from trace import AuditTracer
 
 st.set_page_config(page_title="HackSpain Starter", page_icon="🚀", layout="centered")
 st.title("🚀 HackSpain Starter")
-st.caption("Claude + Exa + fal.ai — esqueleto para arrancar en minutos")
+st.caption(f"LLM: {config.LLM_PROVIDER} ({config.LLM_MODEL}) + Exa + fal.ai + Trazabilidad")
 
-tab_chat, tab_search, tab_image, tab_agent = st.tabs(
-    ["💬 Claude", "🔎 Buscar (Exa)", "🎨 Imagen (fal)", "🤖 Agente + RAG"]
+tab_chat, tab_search, tab_image, tab_agent, tab_trace = st.tabs(
+    ["💬 LLM", "🔎 Buscar (Exa)", "🎨 Imagen (fal)", "🤖 Agente + RAG", "🛡️ Traza (Chain of Work)"]
 )
 
 with tab_chat:
-    st.subheader("Chat con Claude")
+    st.subheader(f"Chat con {config.LLM_PROVIDER.capitalize()}")
     prompt = st.text_area("Tu mensaje", "Explícame qué es un hackathon en 2 frases.")
     if st.button("Enviar", key="chat"):
         with st.spinner("Pensando..."):
@@ -64,3 +66,50 @@ with tab_agent:
             with st.expander("Fuentes"):
                 for i, s in enumerate(sources, 1):
                     st.markdown(f"[{i}] [{s['title']}]({s['url']})")
+
+with tab_trace:
+    st.subheader("🛡️ Trazabilidad y Guardarraíl Determinista")
+    st.caption("Patrón enterprise (Maisa, HappyRobot, Embat, Prosper AI): el LLM interpreta, el código valida y audita.")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        case_type = st.selectbox(
+            "Caso operacional simulado",
+            [
+                "Conciliación de Factura (Embat / Maisa)",
+                "Check-Call & Reagendamiento Logístico (HappyRobot)",
+                "Verificación de Seguro & Cita Médica (Prosper AI)",
+            ]
+        )
+    with col2:
+        confidence = st.slider("Confianza del modelo", min_value=0.50, max_value=1.0, value=0.94, step=0.02)
+
+    if st.button("Ejecutar Flujo con Auditoría", key="trace_run"):
+        tracer = AuditTracer(case_type.split(" ")[0].lower())
+        tracer.record_step("ingesta_evento", {"tipo": case_type, "timestamp": "2026-09-18T18:00:00Z"})
+        tracer.record_step("extraccion_llm", {"modelo": config.LLM_MODEL, "confianza_base": confidence})
+        
+        # Validación determinista
+        is_safe = confidence >= 0.90
+        tracer.record_step(
+            "guardarail_determinista",
+            {"regla": "umbral_minimo_autonomia >= 0.90", "aprobado": is_safe},
+            status="PASS" if is_safe else "WARNING"
+        )
+
+        proposal = tracer.propose_action(
+            action_type="escritura_sistema_registro",
+            payload={"accion": "post_ledger_or_booking", "id": "TX-2026-88"},
+            confidence=confidence,
+            confidence_threshold=0.90,
+            reversible=True,
+        )
+
+        st.success(f"Ejecución completada en {tracer.steps[-1].duration_ms:.1f}ms")
+        st.code(tracer.summary_table())
+
+        st.markdown("#### Estado de la Propuesta:")
+        if proposal.requires_human_approval:
+            st.warning("⚠️ Requiere Aprobación Humana (Confianza < 90%). La acción no se ejecutó a ciegas.")
+        else:
+            st.info("✅ Aprobación Autónoma (Confianza >= 90%). Escritura permitida con trazabilidad.")

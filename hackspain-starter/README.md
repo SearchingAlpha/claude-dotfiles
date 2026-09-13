@@ -14,12 +14,16 @@ tus claves, verificas que las tres herramientas responden, y a construir tu idea
 
 ```
 hackspain-starter/
-├── config.py        # lee .env; proveedor de LLM, modelo, defaults
-├── llm.py           # Claude: chat() + run_agent() (bucle de tools a mano, legible)
+├── config.py        # lee .env; proveedor de LLM (Claude, Gemini, OpenAI, proxies), modelo, defaults
+├── llm.py           # LLM: chat() + run_agent() (bucle de tools a mano, legible)
 ├── search.py        # Exa: web_search()
 ├── media.py         # fal.ai: generate_image()
+├── trace.py         # Auditoría determinista ("Chain of Work", propuestas reversibles, guardarraíles)
+├── harness.py       # CLI de harness: repomap, check sintáctico SWE-agent, eval adversarial, init multi-IDE
+├── repomap.py       # Mapa semántico de símbolos (<2k tokens) para no saturar contexto
+├── hackspain_cli.py # Helper para la CLI oficial (milestones, post venue feed, scout)
 ├── agent.py         # ata los 3: ask() (agente autónomo) + rag_answer() (RAG citado)
-├── app.py           # demo web Streamlit (4 pestañas)
+├── app.py           # demo web Streamlit (5 pestañas, incluye auditoría)
 ├── requirements.txt
 ├── .env.example     # copia a .env y rellena claves
 └── playbooks/                  # kit de preparación (en inglés) — empieza por playbooks/README.md

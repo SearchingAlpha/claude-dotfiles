@@ -16,7 +16,7 @@ _client = None
 
 
 def get_client():
-    """Devuelve un cliente Anthropic según LLM_PROVIDER. Se cachea."""
+    """Devuelve el cliente según LLM_PROVIDER. Se cachea."""
     global _client
     if _client is not None:
         return _client
@@ -31,31 +31,63 @@ def get_client():
     elif provider == "bedrock":
         from anthropic import AnthropicBedrock  # pip install "anthropic[bedrock]"
         _client = AnthropicBedrock()  # credenciales AWS estándar; región AWS_REGION
+    elif provider in ("openai", "gemini"):
+        try:
+            import openai
+        except ImportError:
+            raise ImportError("Para usar 'openai' o 'gemini' como LLM_PROVIDER: pip install openai")
+        
+        if provider == "gemini":
+            # Endpoint OpenAI-compatible nativo de Google Gemini
+            base_url = config.LLM_BASE_URL or "https://generativelanguage.googleapis.com/v1beta/openai/"
+            api_key = config.GEMINI_API_KEY or config.OPENAI_API_KEY
+            _client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        else:
+            _client = openai.OpenAI(
+                api_key=config.OPENAI_API_KEY,
+                base_url=config.LLM_BASE_URL or None,
+            )
     else:
         raise ValueError(f"LLM_PROVIDER desconocido: {provider!r}")
     return _client
 
 
 def resolve_model(model=None):
-    """Normaliza el ID del modelo. En Bedrock los IDs llevan prefijo 'anthropic.'."""
-    model = model or config.CLAUDE_MODEL
+    """Normaliza el ID del modelo según el proveedor."""
+    model = model or config.LLM_MODEL
     if config.LLM_PROVIDER == "bedrock" and not model.startswith("anthropic."):
         return "anthropic." + model
     return model
 
 
 def chat(prompt, system=None, model=None, max_tokens=None):
-    """Una sola pregunta -> texto. Para clasificar, resumir, escribir, etc."""
+    """Una sola pregunta -> texto. Funciona con Claude, Gemini u OpenAI."""
     client = get_client()
+    provider = config.LLM_PROVIDER
+    resolved = resolve_model(model)
+    max_tokens = max_tokens or config.MAX_TOKENS
+
+    if provider in ("openai", "gemini"):
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        resp = client.chat.completions.create(
+            model=resolved,
+            messages=messages,
+            max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content or ""
+
+    # Proveedores Anthropic (anthropic, aws, bedrock)
     kwargs = {
-        "model": resolve_model(model),
-        "max_tokens": max_tokens or config.MAX_TOKENS,
+        "model": resolved,
+        "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
     if system:
         kwargs["system"] = system
     resp = client.messages.create(**kwargs)
-    # response.content es una lista de bloques; nos quedamos con el texto.
     return "".join(b.text for b in resp.content if b.type == "text")
 
 
