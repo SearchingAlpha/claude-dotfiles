@@ -5,5 +5,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Python cache
+__pycache__/
+*.py[cod]
+
 # Amazon-internal skills — never commit to public repo
 skills-amazon/
