@@ -12,7 +12,10 @@ y se replican al directorio de usuario de Claude Code mediante scripts de instal
 claude-dotfiles/
 ├── commands/                    # slash commands (resolver, autobuild, builds, post, hs-*)
 ├── hackspain-starter/           # kit HackSpain 2026: scaffold Python + playbooks + cheat sheets
-├── harnesses/autonomous-coding/ # harness de 3 agentes (se ejecuta in-place, no lo instala install.sh)
+├── harnesses/
+│   ├── autonomous-coding/       # harness de 3 agentes (se ejecuta in-place, no lo instala install.sh)
+│   ├── eval-inspect/            # harness de evaluación formal de agentes con Inspect AI
+│   └── tools/                   # utilidades compartidas (harness.py CLI, repomap.py, init_project.py multi-IDE)
 ├── skills/                      # skills generales
 │   ├── grilling/
 │   ├── grill-me/
@@ -75,6 +78,9 @@ cd ~/claude-dotfiles
 | Comando | Descripción |
 |---|---|
 | `/resolver` | Protocolo de resolución de problemas con IA: clasifica el tipo, ejecuta los 7 pasos con mapeo humano↔LLM, e incluye verificación adversarial contra sycophancy. |
+| `/repomap` | Extrae y carga el mapa semántico de símbolos del repo (estilo Aider Repo-Map) para orientar al modelo sin saturar contexto. |
+| `/architect` | Modo Arquitecto (pensar primero, editar después): diseña la solución, mapea dependencias y diffs conceptuales sin tocar ficheros hasta aprobación. |
+| `/eval` | Evaluador adversarial en sesión: adopta el rol de Evaluator escéptico independiente para intentar refutar que el cambio funciona mediante pruebas reales. |
 | `/autobuild` | Lanza el harness autónomo de 3 agentes (Planner / Generator / Evaluator) sobre una spec. |
 | `/builds` | Dashboard de solo lectura de las sesiones del harness. |
 | `/post` | Bucle de contenido "Show Your Work" para LinkedIn/X sobre el vault de Obsidian. Un paso por invocación. |
