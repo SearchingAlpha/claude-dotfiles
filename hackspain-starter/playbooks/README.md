@@ -11,7 +11,7 @@ Total read: about 90 minutes. Event facts as of 8 Sep 2026; the live site
 |---|---|---|
 | `01-game-plan.md` | 15 | Goals, your role, the 36h timeline with checkpoints, decision rules, the `hackspain` CLI as a visibility asset, submission checklist. |
 | `02-challenge-framing.md` | 15 | Hours 1–3: from challenge text to a pinned Framing Brief. JTBD, scoring matrix, demo moment, tracer bullet, quantified impact. |
-| `embat-xray-research.md` | 20 | Embat "X Ray" challenge condensed, dataset = Embat API schema, prior art (cash-flow underwriting, payment behaviour, trajectory, explainability, monitoring), evaluation protocol, product comparables. |
+| `embat-xray-research.md` | 30 | Embat "X Ray" challenge condensed, dataset = Embat API schema, prior art (cash-flow underwriting, payment behaviour, trajectory, explainability, monitoring), evaluation protocol, product comparables. |
 | `03-tracks-dossier.md` | 25 | One section per track startup: product loop, what they care about, likely challenge themes, what "great" looks like, Q&A landmines, careers pages. |
 | `04-pitch-and-demo.md` | 15 | The three-minute skeleton for VC and startup judges, demo engineering with a fallback ladder, the four-step Q&A protocol, likely questions. |
 | `05-networking.md` | 15 | Before, during, after. Target list by group, the ask ladder, openers, co-founder fit, follow-up cadence. |

@@ -314,7 +314,146 @@ report it.
   150 (2024) and TellMe trained on 250+ finance teams. Do not quote 400 to
   the founders.
 
+## 8. Who already runs a similar algorithm in production
+
+What each company publishes about *how*. "n/p" = not published. Vendor
+marketing numbers are labelled as such.
+
+| Company, score | Inputs | Algorithm as published | How they handle trajectory | Claimed lift |
+|---|---|---|---|---|
+| **VantageScore 4.0** trended attributes | 24 months of balance, limit, minimum due, scheduled vs actual payment | Segmented scorecards built with and without trended attributes | Explicit attribute families: slope of balance, start-to-end % change, % change over 12 months, count of limit changes in 3 months, highest monthly utilisation, time since over-limit; windows 3/6/12/24 months; looks past a "momentary spike" | Gini +4.7 to +13.8% existing accounts, up to ~20% (Philadelphia Fed paper) |
+| **FICO 10T** | 24+ months balance and limit history | Scorecard; classifies revolver vs transactor from balance path | Balance trending up, down or flat; rising = risk | up to 17% fewer mortgage defaults vs FICO 8 (FICO PR) |
+| **Experian Trended 3D** | same 5 fields × 24 months | Attribute library on "rate and stability of change" | Slope of balance growth, payment velocity, erratic behaviour, rapid paydown or accumulation | up to 7% lift (vendor) |
+| **TransUnion CreditVision / TruVision** | up to 24 months incl. actual payments | Ratio algorithms: total payment ratio, payment-to-balance, excess payment | Trailing-window ratios, "time-series attributes" | n/p |
+| **Plaid LendScore** | bank transactions, 1.44M tradelines, label 90+ DPD in 12 months | XGBoost with monotonic constraints, 145 features, SHAP → 5 reason codes, score 1–99 | 30/60/90-day windows: average monthly inflows, balance SD, balance trend, income regularity; 81% of power from cash-flow features | KS +9.1% overall, +16.6% charge cards (Plaid blog) |
+| **Prism Data CashScore v4** | deposit-account transactions, consortium | Attribute families income, balances, expenses, bills, behaviours, ratios; reason codes like "balance trend: increasing", "change in discretionary spending" | recent vs prior comparisons | "30% predictive lift" (vendor) |
+| **Nova Credit Cash Atlas**, **Tink Risk Insights** | bank transactions | 1,000+ windowed attributes (1 day to 24 months); overdraft days, loan repayment ratio, collections | multi-window | "+15% approvals", "+40% Gini" (vendor) |
+| **Square Loans** (patents US9727912B1, US11176607B1, US10019698B1) | card processing history | ML classifier on payment history, GPV over period, **month-over-month GPV growth**; clustering + supervised models on sales velocity and seasonal cycles; offer ≈ 8% of annual GPV | detects slow seasons from **peer merchants** and defers withholding: separates seasonal dip from decline | n/p |
+| **Stripe Capital**, **Shopify Capital**, **QuickBooks Capital** | processing or accounting data, ≥ 90 days | daily automated prequalification, undisclosed ML | "processing consistency, growth trajectory, customer breadth, dispute rate" (Stripe); "sales trends and seasonality" (Intuit) | n/p |
+| **OnDeck Score** (patent US20130339217A1) | read-only bank feed, bureau, firmographics, "2,000+ data points" | rules engine plus risk score | trend formula not disclosed | n/p |
+| **Intuit** patent US11270375B1 | income, utilisation, balances, negative-balance flags | ML → probability → letter grade A+ to F; three sub-scores: day-to-day (−100..100), emergency (0–10), prosperity (0–100) | none disclosed | n/p |
+| **Moody's RiskCalc** (private firms) | 10 ratios from 17 statement items | univariate non-linear transforms → probit → EDF at 1 and 5 years; industry and credit-cycle adjustment | trend enters via cycle factor, not firm history | accuracy-ratio tables in paper |
+| **Moody's KMV EDF** | equity value and volatility, liabilities | distance to default = (expected asset value − default point) / asset volatility; default point = short-term debt + ½ long-term debt | the DD path is the early-warning signal | — |
+| **CreditRiskMonitor FRISK / PAYCE** | market data, Altman-style ratios, crowdsourced usage; PAYCE = trade-payment data only | blended model | daily re-score; payment-behaviour deterioration | FRISK: 95–96% of bankruptcies in 12 months in classes 1–5, ~3× Z''; PAYCE: "80%+ of bankruptcies 12 months ahead" (vendor) |
+| **Dun & Bradstreet Failure Score / Delinquency Predictor** | trade experiences incl. **month-to-month payment trends**, filings, financials | predictive model → 1,001–1,875 score, class 1–5, 12-month horizon | payment trend is an explicit input | n/p |
+| **Iberinform Insight View** (Spain) | RAI/ASNEF defaults, statements, investigated data, "AI on financial magnitudes" | "Score de Riesgo" = probability of meeting obligations within 12 months; 25 alert types | change alerts | n/p |
+| **CESCE, Coface URBA360, Inbonis, Informa D&B, Axesor** (Spain) | payment behaviour, statements | nothing algorithmic public; converge on 12-month PD + payment behaviour + change alerts | — | — |
+| Kabbage/Amex, iwoca, Funding Circle, Tide, Brex, Ramp, Codat, Ocrolus, Credit Kudos, Bud, Qonto, Agicap, bank EWS (Intesa, ING, BBVA, Santander) | bank + accounting feeds | marketing text only | — | — |
+
+**What to imitate.**
+1. VantageScore-style trended attributes per metric: slope over 3/6/12/24
+   months, start-to-end % change, months above or below threshold, highest
+   month, time since event. Applied to cash balance, inflows, DSO, debt service.
+2. Square's trick for dip vs decline: compare to same month last year and to
+   peer seasonality (Banco de España sector ratios as the peer set), and
+   require 2–3 consecutive months of negative slope before calling it
+   structural.
+3. Plaid's stack: monotone GBDT plus SHAP top-5 reason codes per month.
+4. KMV's metric on cash: distance to default = (cash + expected net inflows
+   over horizon − debt service due) / volatility of monthly net cash flow.
+   Forward-looking and interpretable; months-to-barrier = (A − D) / |drift|.
+5. D&B / PAYCE: payment-lag trends degrade before balances do. Lead with them.
+6. Report lift like a bureau: score with vs without trended features, Gini or
+   KS gain on the held-out set.
+
+## 9. Algorithms that fit this dataset
+
+| Algorithm | Prior art | Recipe | Fit | Gives anticipation / explanation |
+|---|---|---|---|---|
+| **Amex-style panel aggregation + GBDT** | Kaggle Amex Default Prediction 2022: 13 monthly statements × 190 features, same panel shape. 1st place: denoise → last/mean/min/max/std/first, last − first, lag diffs → LightGBM DART + GRU blend. GBDT on aggregates dominated; sequence nets only as blend members | `groupby(company).agg(last, mean, min, max, std, first)` on rolling 3/6/12 windows, slope via `polyfit`; `LGBMClassifier(boosting_type='dart', num_leaves=63, lr=0.02)`; GroupKFold by group | **Yes**, core | SHAP on aggregates; anticipation comes from the target horizon |
+| **Landmarking + discrete-time hazard** | van Houwelingen 2007; Saini 2024 | at each month t, features = history to t, target = event within h ∈ {3,6,12}; `LogisticHazard` (pycox) or one LightGBM per horizon | **Yes**, cleanest anticipation | first horizon where P(event) > threshold = months of lead |
+| **Random Survival Forest** | scikit-survival | `RandomSurvivalForest(n_estimators=500, min_samples_leaf=15)` on ~25k landmark rows; `predict_survival_function` | Yes | expected time to event |
+| **Cox time-varying** | lifelines `CoxTimeVaryingFitter` | long format start/stop per month | Maybe (prediction awkward) | coefficients per ratio |
+| **3-state HMM on the score** | hmmlearn | `GaussianHMM(n_components=3, covariance_type='diag')`, `lengths=[24]*n`; several seeds | **Yes**, trajectory layer | state posterior per month = improving / stable / deteriorating; expected duration 1/(1 − p_ii) = months to transition |
+| **Rating migration matrix** | Jarrow–Lando–Turnbull; Moody's / S&P transition studies; `transitionMatrix` lib | bucket score into bands, estimate 1-month transition matrix from the panel | **Yes**, trivial | P(downgrade within h) = row of T^h |
+| **Markov-switching regression** | statsmodels `MarkovRegression`; Duprey & Klaus ECB WP 2057 on financial stress regimes | pooled fit on score series, `k_regimes=2`, `switching_variance=True` | Maybe (24 points per company is thin) | `expected_durations`, smoothed regime probabilities |
+| **Bayesian online changepoint** | Adams & MacKay 2007 | `bayesian_changepoint_detection`, `constant_hazard(12)`, StudentT | Yes for dip vs structural | run length resets then recovers = one-off; persistent new regime = structural |
+| **Kalman local linear trend** | statsmodels `UnobservedComponents` | `'local linear trend'` per series, filtered slope | Yes | slope sign and CI |
+| **Cash-flow distance to default** | Bharath & Shumway 2008 naive DD | `DD = (ln(A/D) + (mu − s²/2)·T) / (s·√T)`, A = cash + expected receivables, D = 12-month debt service from `debt_schedule_config`, mu and s from monthly net cash flow | **Yes**, one line | months to barrier = (A − D) / |drift| |
+| **TabPFN v2** | Hollmann et al., Nature 2025; TabPFN-TS | `TabPFNClassifier().fit(X, y)` on the aggregated (company, month) rows; zero tuning | Yes as ensemble member (≤ 10k rows) | — |
+| **Monotone LightGBM / CatBoost** | Plaid LendScore; arXiv 2512.17945 | `monotone_constraints` (+ runway, − overdue share), `monotone_constraints_method='advanced'` | **Yes** | defensible reason codes |
+| **WoE scorecard** | OptBinning, scorecardpy, toad, skorecard, xBooster | `Scorecard(binning_process, LogisticRegression)`; xBooster converts a GBDT into points | **Yes** for the explainable view | additive points, delta waterfall, counterfactuals ("what raises the score") |
+| **Bayesian hierarchical** | bambi | `distress ~ ratios + (1|group)`, bernoulli | Maybe (sampling time) | partial pooling across 250 groups helps hidden companies that share a group |
+| **MiniRocket / tsfresh** | sktime, tsfresh | `MiniRocket(num_kernels=512)` + `RidgeClassifierCV`; `extract_features(MinimalFCParameters)` | tsfresh yes, MiniRocket maybe (black box) | tsfresh slope, autocorrelation, peaks feed GBDT |
+| InceptionTime, GRU/transformer alone | Amex 2nd place | — | No: too few sequences unless trained on ~25k sliding windows | — |
+
+**Label construction when the truth is hidden.** Proxy event at month t:
+any of cash runway < 1 month within h, overdue receivables or payables
+share above x, DSCR < 1 for two consecutive months, missed amortisation.
+Composite index per the OECD / JRC handbook: z-score each ratio, weight by
+PCA loadings or equal weights, sensitivity-test the weights. Altman-style:
+fit a logistic on the proxy to obtain weights. Pseudo-label with temporal
+consistency across adjacent months. Sanity-test the trajectory model on the
+Kaggle "Financial Distress" panel (422 companies × periods, distress when
+value < −0.50): the only public company-level panel with a distress target.
+
+**Recommended 36h stack.**
+1. Monthly ratio table + Amex-style rolling aggregates (3/6/12 months:
+   last, mean, min, max, std, slope) + cash-flow distance to default +
+   VantageScore-style trended attributes + Banco de España sector-quartile
+   peer z-scores.
+2. Proxy target = forward distress within h ∈ {3, 6, 12} (landmark framing).
+3. Monotone LightGBM + TabPFN v2 blend; GroupKFold by corporate group; SHAP
+   reason codes; WoE scorecard as the presentation layer.
+4. Trajectory layer: Kalman slope + Bayesian changepoint run length (dip vs
+   structural) + 3-state HMM on the score + migration matrix for
+   P(downgrade in h months).
+5. Anticipation = lead time between first alarm and proxy event: median
+   months and AUC per horizon. Report Gini with vs without trended features.
+
+**Rule-based v0 before any ML** (from `pelzade127/cash-flow-creditworthiness-scorer`):
+income stability 30%, debt-to-income 25%, runway months 20%, overdraft
+history 15%, expense management 10%; tiers A–D with reasons. Ship this in
+hour 3, then beat it.
+
+**Regulatory vocabulary for sub-scores** (EBA GL 2020/06 Annex 3, para 274;
+Banco de España DO 2020): debt-service ratio increase, drop in turnover or
+recurring cash flow (loss of a major client), margin narrowing, worsening
+financing conditions, behavioural-score decrease, 30 days past due; ratios
+DSCR, cash debt coverage, interest coverage, debt/EBITDA, current ratio,
+turnover evolution; BdE flags negative equity and equity < 50% of net debt.
+Name the sub-scores after these.
+
 ## Sources
+
+Production scores: philadelphiafed.org (VantageScore trended credit data paper, 2017) ·
+myfico.com/credit-education/credit-scores/fico-score-versions ·
+experian.com/blogs/insights/trended-attributes-help-lenders-better-serve-consumers-across-credit-life-cycle/ ·
+transunion.ca/solution/truvision/algorithms-attributes ·
+plaid.com/blog/how-we-built-lendscore/ · prismdata.com/cashscore/ ·
+novacredit.com/cash-atlas · tink.com/products/risk-insights/ ·
+patents.google.com/patent/US9727912B1 · patents.google.com/patent/US11176607B1 ·
+patents.google.com/patent/US10019698B1 · patents.google.com/patent/US20130339217A1 ·
+patents.google.com/patent/US11270375B1 · docs.stripe.com/capital/how-capital-for-platforms-works ·
+quickbooks.intuit.com/capital/ · efalken.com/papers/riskcalc.pdf ·
+en.wikipedia.org/wiki/KMV_model · pages.creditriskmonitor.com (FRISK white paper 2026) ·
+creditriskmonitor.com/resources/white-papers · dnb.com/en-us/smb/resources/credit-scores/failure-score.html ·
+iberinform.es/productos/insightview · cesce.es/es/w/servicios/monitorizacion-de-riesgos ·
+arxiv.org/abs/2510.22287
+
+Algorithms: github.com/jxzly/Kaggle-American-Express-Default-Prediction-1st-solution ·
+kaggle.com/competitions/amex-default-prediction/discussion/348111 ·
+dl.acm.org/doi/fullHtml/10.1145/3582099.3582130 ·
+github.com/minerva-ml/open-solution-home-credit · hmmlearn.readthedocs.io ·
+statsmodels.org (markov_regression, statespace_local_linear_trend) ·
+ecb.europa.eu/pub/pdf/scpwps/ecb.wp2057.en.pdf ·
+github.com/hildensia/bayesian_changepoint_detection ·
+lifelines.readthedocs.io (CoxTimeVaryingFitter) · scikit-survival.readthedocs.io ·
+github.com/havakv/pycox · nature.com/articles/s41586-024-08328-6 (TabPFN v2) ·
+arxiv.org/abs/2501.02945 (TabPFN-TS) · bambinos.github.io/bambi/ ·
+sktime.net (MiniRocket) · tylergshumway.org/Bharath-ForecastingDefaultMerton-2008.pdf ·
+oecd.org (Handbook on constructing composite indicators, 2008) ·
+kaggle.com/datasets/shebrahimi/financial-distress
+
+Scorecard and open-source: github.com/ShichenXie/scorecardpy · github.com/guillermo-navas-palencia/optbinning ·
+github.com/amphibian-dev/toad · github.com/ing-bank/skorecard · github.com/xRiskLab/xBooster ·
+github.com/itlubber/scorecardpipeline · github.com/pelzade127/cash-flow-creditworthiness-scorer ·
+github.com/sirilahari10/prism-cashflow-underwriting · github.com/janMagnusHeimann/bankStatementAnalyzer ·
+github.com/topics/bankruptcy-prediction
+
+Regulatory and Spain: eba.europa.eu (GL 2020/06 final report, Annex 3) ·
+bde.es (Documento Ocasional 2020, Blanco et al.) · app.bde.es/rss_www/Ratios ·
+earlywarningeurope.eu · boe.es/buscar/act.php?id=BOE-A-2022-14580
 
 Embat: embat.io/artificial-intelligence-finance ·
 embat.io/tech-blog/llms-and-determinism-in-finance ·
