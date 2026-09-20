@@ -38,7 +38,9 @@ fi
 # --- skills (install as local plugin) ---
 echo
 echo "Installing skills plugin..."
-claude plugin install "$repo_root" --scope user 2>&1 && echo "Plugin installed." || echo "Plugin install failed — run manually: claude plugin install $repo_root"
+# El repo es a la vez marketplace local (.claude-plugin/marketplace.json) y plugin.
+claude plugin marketplace add "$repo_root" >/dev/null 2>&1 || claude plugin marketplace update claude-dotfiles >/dev/null 2>&1 || true
+claude plugin install claude-dotfiles@claude-dotfiles --scope user 2>&1 && echo "Plugin installed." || echo "Plugin install failed — run manually: claude plugin marketplace add $repo_root && claude plugin install claude-dotfiles@claude-dotfiles --scope user"
 
 echo
 echo "Restart Claude Code (or run /help) to see all commands and skills."

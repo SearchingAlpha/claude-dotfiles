@@ -1,27 +1,28 @@
 {
   "name": "claude-dotfiles",
-  "description": "Portable slash commands and skills for Claude Code",
+  "description": "Personal productivity and engineering skills",
+  "version": "1.1.0",
   "author": {
     "name": "SearchingAlpha"
   },
-  "plugins": [
-    {
-      "name": "claude-dotfiles",
-      "description": "Personal productivity and engineering skills",
-      "source": "../",
-      "skills": [
-        "../skills/grilling",
-        "../skills/grill-me",
-        "../skills/writing-great-skills",
-        "../skills/diagnosing-bugs",
-        "../skills/tdd",
-        "../skills/prototype",
-        "../skills/domain-modeling",
-        "../skills/handoff",
-        "../skills/to-issues",
-        "../skills/code-review",
-        "../skills/roast-my-post"
-      ]
-    }
+  "skills": [
+    "./skills/grilling",
+    "./skills/grill-me",
+    "./skills/writing-great-skills",
+    "./skills/diagnosing-bugs",
+    "./skills/tdd",
+    "./skills/prototype",
+    "./skills/domain-modeling",
+    "./skills/handoff",
+    "./skills/to-issues",
+    "./skills/code-review",
+    "./skills/roast-my-post",
+    "./skills/impeccable"
+  ],
+  "agents": [
+    "./agents/impeccable-asset-producer.md",
+    "./agents/impeccable-documenter.md",
+    "./agents/impeccable-finish-reviewer.md",
+    "./agents/impeccable-manual-edit-applier.md"
   ]
 }

@@ -26,7 +26,10 @@ claude-dotfiles/
 │   ├── domain-modeling/
 │   ├── handoff/
 │   ├── to-issues/
-│   └── code-review/
+│   ├── code-review/
+│   ├── roast-my-post/
+│   └── impeccable/              # design fluency frontend (pbakaus/impeccable, Apache 2.0)
+├── agents/                      # subagentes del plugin (impeccable-*)
 ├── skills-amazon/               # skills internas Amazon — GITIGNORED, nunca commitear
 │   └── README.md
 ├── .claude-plugin/plugin.json   # manifiesto del plugin de skills
@@ -40,7 +43,7 @@ claude-dotfiles/
 
 | Carpeta | ¿En el repo? | Contenido |
 |---|---|---|
-| `skills/` | Sí | Skills generales y de ingeniería (fuente: mattpocock/skills) |
+| `skills/` | Sí | Skills generales y de ingeniería (fuente: mattpocock/skills) + diseño frontend (fuente: pbakaus/impeccable) |
 | `skills-amazon/` | No (gitignored) | Skills con referencias a sistemas internos Amazon |
 
 El repo es **privado** desde el 8 de septiembre de 2026 (contiene material personal
@@ -96,7 +99,7 @@ Los comandos `hs-*` leen su playbook en `hackspain-starter/playbooks/` antes de 
 
 ## Skills disponibles
 
-Las skills se instalan como plugin via `claude plugin install`. `install.sh` lo hace automáticamente.
+Las skills se instalan como plugin local (el repo es marketplace + plugin): `claude plugin marketplace add <repo>` y `claude plugin install claude-dotfiles@claude-dotfiles --scope user`. `install.sh` e `install.ps1` lo hacen automáticamente.
 
 ### Productividad
 
@@ -118,6 +121,21 @@ Las skills se instalan como plugin via `claude plugin install`. `install.sh` lo 
 | `domain-modeling` | model-invoked | Construye y afina el modelo de dominio: desafía términos, captura CONTEXT.md y ADRs. |
 | `to-issues` | user-invoked | Rompe un plan/PRD en issues independientes usando vertical slices (tracer bullets). |
 | `code-review` | model-invoked | Review en dos ejes paralelos: Standards (smells + convenciones) y Spec (¿implementa lo pedido?). |
+
+### Diseño frontend
+
+| Skill | Tipo | Descripción |
+|---|---|---|
+| `impeccable` | ambos | [Impeccable](https://impeccable.style) v4.3.1 (Apache 2.0). Un skill con 24 sub-comandos: `/impeccable shape`, `audit`, `critique`, `polish`, `bolder`, `quieter`, `distill`, `harden`, `onboard`, `animate`, `colorize`, `delight`, `layout`, `typeset`, `adapt`, `clarify`, `optimize`, `overdrive`, `init`, `document`, `extract`, `live`, `generate`, `craft` (alias deprecado). Se auto-invoca en tareas de UI. |
+
+Trae 4 subagentes en `agents/` (`impeccable-asset-producer`, `impeccable-documenter`,
+`impeccable-finish-reviewer`, `impeccable-manual-edit-applier`). El launcher
+`skills/impeccable/scripts/impeccable` descarga en el primer uso un binario a `~/.impeccable/bin/`
+(sin Node). Los hooks PostToolUse/Stop del plugin original **no** están incluidos; ver
+`skills/impeccable/reference/hooks.md` si los quieres.
+
+Para actualizar: clonar `pbakaus/impeccable`, copiar `plugin/skills/impeccable` y `plugin/agents/`
+encima, y revisar el diff.
 
 Fuente: [mattpocock/skills](https://github.com/mattpocock/skills)
 
