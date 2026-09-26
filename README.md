@@ -122,6 +122,24 @@ Las skills se instalan como plugin local (el repo es marketplace + plugin): `cla
 | `to-issues` | user-invoked | Rompe un plan/PRD en issues independientes usando vertical slices (tracer bullets). |
 | `code-review` | model-invoked | Review en dos ejes paralelos: Standards (smells + convenciones) y Spec (¿implementa lo pedido?). |
 
+### SEO (fuentes gratuitas)
+
+| Skill | Tipo | Descripción |
+|---|---|---|
+| `seo` | user-invoked | Router: cuota, último informe por skill y el siguiente paso. Cero llamadas. |
+| `seo-setup` | user-invoked | Crea/actualiza el `seo-project.json` de un repo: infiere, pregunta lo justo, prueba cada fuente. |
+| `seo-keywords` | user-invoked | Keyword research por metro: striking distance (GSC), volumen Bing, SERPs Brave, clusters por intención, página destino. |
+| `seo-competitors` | user-invoked | `landscape <metro>` (quién gana cada intención) o `<dominio>` (perfil de un rival con checklist de citabilidad). |
+| `seo-rank` | user-invoked | Matriz Brave/Google/Bing/GSC por query, diff semanal, striking distance. |
+| `seo-links` | user-invoked | Link prospecting honesto: prospectos, contacto con fuente, ángulo y borrador; pipeline en JSONL. |
+
+Replican los resultados de [open-seo](https://github.com/every-app/open-seo) (MIT, metodología
+adaptada — ver `skills/seo/NOTICE.md`) sin DataForSEO: GSC, Bing Webmaster Tools, Brave Search
+API ($5/mes de crédito), SerpAPI y Common Crawl. Ninguna llama APIs: ejecutan
+`harnesses/tools/seo/seo.py` (stdlib-only) por Bash; cada proyecto aporta un `seo-project.json`.
+KD, CPC, volumen Google y backlinks de competidores **no** existen gratis y se reportan como `n/d`.
+Contratos, esquemas y playbook en `harnesses/tools/seo/README.md`.
+
 ### Diseño frontend
 
 | Skill | Tipo | Descripción |
