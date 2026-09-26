@@ -25,7 +25,8 @@ def register(sub, common):
     p.set_defaults(func=run)
 
 
-def _try(label: str, fn, out: dict) -> None:
+def _try(label: str, fn, out: dict, cfg: dict | None = None, source: str | None = None) -> None:
+    """Ejecuta fn; guarda ok/error; carga cuota solo si la llamada llegó a responder."""
     try:
         res = fn()
         out[label] = {"ok": True, "data": res}
@@ -33,6 +34,11 @@ def _try(label: str, fn, out: dict) -> None:
     except BaseException as e:            # SystemExit de secret() incluido
         out[label] = {"ok": False, "error": str(e)}
         human(f"  FAIL {label} · {e}")
+        if not str(e).startswith("red:") and cfg and source:
+            quota_charge(cfg, source, 1)  # HTTP 4xx/5xx: la API sí contó la llamada
+        return
+    if cfg and source:
+        quota_charge(cfg, source, 1)
 
 
 def run(args, cfg) -> int:
@@ -55,15 +61,14 @@ def run(args, cfg) -> int:
         styles = ["iso", "ms"] if args.bing_date_style == "both" else [args.bing_date_style]
         for st in styles:
             _try(f"bing_GetKeyword_{st}",
-                 lambda st=st: bingkw_keyword(key, kw, geo["country"], lang, start, end, st), src)
-            quota_charge(cfg, "bing_kw", 1)
+                 lambda st=st: bingkw_keyword(key, kw, geo["country"], lang, start, end, st),
+                 src, cfg, "bing_kw")
         _try("bing_GetKeywordStats",
-             lambda: bingkw_keyword_stats(key, kw, geo["country"], lang), src)
-        quota_charge(cfg, "bing_kw", 1)
+             lambda: bingkw_keyword_stats(key, kw, geo["country"], lang), src, cfg, "bing_kw")
         ok_style = next((s for s in styles if src.get(f"bing_GetKeyword_{s}", {}).get("ok")), None)
         _try("bing_GetRelatedKeywords",
-             lambda: bingkw_related(key, kw, geo["country"], lang, start, end, ok_style or "iso"), src)
-        quota_charge(cfg, "bing_kw", 1)
+             lambda: bingkw_related(key, kw, geo["country"], lang, start, end, ok_style or "iso"),
+             src, cfg, "bing_kw")
         out["bing_date_style_ok"] = ok_style
     else:
         src["bing_wmt"] = {"ok": False, "error": "secreto bing_wmt ausente"}
@@ -72,9 +77,8 @@ def run(args, cfg) -> int:
     human("[brave]")
     if has_secret(cfg, "brave"):
         _try("brave", lambda: brave_search(secret(cfg, "brave"), kw, count=5,
-                                           country=geo["country"], lang=geo["language"]), src)
-        if src["brave"]["ok"]:
-            quota_charge(cfg, "brave", 1)
+                                           country=geo["country"], lang=geo["language"]),
+             src, cfg, "brave")
     else:
         src["brave"] = {"ok": False, "error": "secreto brave ausente"}
         human("  SKIP brave (sin clave) → api.search.brave.com, plan Free")

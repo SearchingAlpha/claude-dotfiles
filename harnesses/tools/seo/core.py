@@ -107,6 +107,9 @@ def load_project(path: str | None) -> dict:
     except json.JSONDecodeError as e:
         raise SystemExit(f"config inválido {p}: {e}")
     missing = [k for k in REQUIRED_KEYS if k not in cfg]
+    for parent, child in (("geo", "country"), ("geo", "language"), ("queries", "money")):
+        if not (isinstance(cfg.get(parent), dict) and cfg[parent].get(child)):
+            missing.append(f"{parent}.{child}")
     if missing:
         raise SystemExit(f"config {p}: faltan claves obligatorias {missing}")
     base = p.parent
