@@ -23,7 +23,8 @@
     "./skills/to-issues",
     "./skills/code-review",
     "./skills/roast-my-post",
-    "./skills/impeccable"
+    "./skills/impeccable",
+    "./skills/explaining-clearly"
   ],
   "agents": [
     "./agents/impeccable-asset-producer.md",
