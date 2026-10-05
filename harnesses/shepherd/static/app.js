@@ -134,7 +134,7 @@ function lane(repo) {
   const head = h("div", { class: "lane-head" },
     h("h2", { title: repo.primary }, repo.name),
     h("span", { class: `chip ${repo.mode}`, title: repo.mode === "enforce" ? "edits/commits on protected branches are blocked" : "warnings only" }, repo.mode),
-    h("span", { class: "chip", title: `base ${repo.base}` }, `main ${repo.main}`),
+    h("span", { class: "chip", title: `base ${repo.base}` }, `protected: ${(repo.protected || [repo.main]).join(", ")}`),
     repo.unpushed ? h("span", { class: "chip warn" }, `${repo.unpushed} unpushed on ${repo.main}`) : null,
     repo.main_dirty ? h("span", { class: "chip bad" }, `${repo.main_dirty} uncommitted on ${repo.main}`) : null,
     (repo.on_main || []).length ? h("span", { class: "chip warn", title: repo.on_main.map((s) => s.name).join(", ") },
