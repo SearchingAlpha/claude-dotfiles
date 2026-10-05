@@ -35,6 +35,26 @@ else
     echo "Done. ${#files[@]} command(s) linked to $target_dir"
 fi
 
+# --- shepherd CLI ---
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$repo_root/harnesses/shepherd/shepherd.py" "$HOME/.local/bin/shepherd"
+echo
+echo "Linked: shepherd -> $HOME/.local/bin/shepherd"
+
+# --- private skills (gitignored skills-amazon/: never in plugin.json) ---
+# Each subfolder with a SKILL.md becomes a user skill; its install.sh, if any,
+# runs too (e.g. to drop a shepherd review backend into ~/.claude/shepherd/backends/).
+shopt -s nullglob
+for dir in "$repo_root"/skills-amazon/*/; do
+    dir="${dir%/}"
+    [[ -f "$dir/SKILL.md" ]] || continue
+    mkdir -p "$HOME/.claude/skills"
+    ln -sfn "$dir" "$HOME/.claude/skills/$(basename "$dir")"
+    echo "Linked private skill: $(basename "$dir")"
+    [[ -x "$dir/install.sh" ]] && "$dir/install.sh"
+done
+shopt -u nullglob
+
 # --- skills (install as local plugin) ---
 echo
 echo "Installing skills plugin..."
