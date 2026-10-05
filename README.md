@@ -25,6 +25,7 @@ claude-dotfiles/
 │   ├── prototype/
 │   ├── domain-modeling/
 │   ├── handoff/
+│   ├── parallel-sessions/
 │   ├── to-issues/
 │   ├── code-review/
 │   ├── roast-my-post/
@@ -108,6 +109,7 @@ Las skills se instalan como plugin local (el repo es marketplace + plugin): `cla
 | `grilling` | model-invoked | Entrevista relentless sobre cada aspecto de un plan hasta resolver todas las decisiones. |
 | `grill-me` | user-invoked | Lanza una sesión `/grilling`. |
 | `handoff` | user-invoked | Compacta la conversación en un doc de continuidad para la próxima sesión. |
+| `parallel-sessions` | model-invoked | Coordina varias sesiones de Claude Code en el mismo repo: ledger compartido de quién es dueño de qué, un worktree por sesión, hábitos de git seguros. |
 | `writing-great-skills` | user-invoked | Referencia para escribir y editar skills — vocabulario y principios de predictabilidad. |
 | `roast-my-post` | user-invoked | Gallo/roaster de borradores (LinkedIn/social, ES o EN): puntúa cuánto suena a IA, destroza los tells citando tu texto, y lo reescribe con voz humana. |
 

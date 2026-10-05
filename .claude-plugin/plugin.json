@@ -1,7 +1,7 @@
 {
   "name": "claude-dotfiles",
   "description": "Personal productivity and engineering skills",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": {
     "name": "SearchingAlpha"
   },
@@ -14,6 +14,7 @@
     "./skills/prototype",
     "./skills/domain-modeling",
     "./skills/handoff",
+    "./skills/parallel-sessions",
     "./skills/to-issues",
     "./skills/code-review",
     "./skills/roast-my-post",
