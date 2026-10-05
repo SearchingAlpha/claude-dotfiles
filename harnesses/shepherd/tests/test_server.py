@@ -58,6 +58,11 @@ class TestServer(unittest.TestCase):
         self.assertEqual(card["goal"], "goal a")
         status, _, body = self.get(f"/api/track?repo={repo['common']}&track=a", cookie="shepherd=tok")
         self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["subagents"], [])
+        status, _, raw = self.get("/api/agents", cookie="shepherd=tok")
+        self.assertEqual(status, 200)
+        graph = json.loads(raw)
+        self.assertEqual([t["name"] for s in graph["sessions"] for t in s["tracks"]], ["a"])
         self.assertEqual(json.loads(body)["track"]["name"], "a")
         self.assertEqual(self.get("/api/track?repo=/nope&track=a", cookie="shepherd=tok")[0], 404)
 

@@ -8,7 +8,7 @@ import os
 import time
 from typing import Optional
 
-from . import gitx, hooks, identity, store
+from . import agents as agentsmod, gitx, hooks, identity, store
 
 _cache: dict = {}
 
@@ -94,7 +94,8 @@ def repo_view(common: str, sessions: dict) -> Optional[dict]:
             "last_commit": last_commit, "last_activity": act.get("at") if act else None,
             "last_file": act.get("file") if act else None, "review": rv or None,
             "warnings": warnings, "created_at": t.get("created_at"), "updated_at": t.get("updated_at"),
-            "sha": sha,
+            "sha": sha, "subagents": agentsmod.summary(
+                agentsmod.subagents(agent["session_id"], agent["live"])) if agent["session_id"] else {},
         })
 
     protected = cfg.get("protected") or []
@@ -197,6 +198,56 @@ def snapshot(ttl: float = 2.0) -> dict:
     return data
 
 
+def agents_graph() -> dict:
+    """Every session on the board with its subagent tree, and the links between
+    tracks: messages one track logged to another, and files two tracks share."""
+    snap = snapshot()
+    sessions = identity.sessions_by_id()
+    nodes: dict = {}
+    for r in snap["repos"]:
+        for c in r.get("tracks", []):
+            a = c.get("agent") or {}
+            sid = a.get("session_id")
+            key = sid or f"unclaimed:{r.get('common')}:{c['name']}"
+            n = nodes.setdefault(key, {"session_id": sid, "name": a.get("name") or "unclaimed",
+                                       "live": bool(a.get("live")), "status": a.get("status"),
+                                       "title": a.get("title"), "tracks": []})
+            n["tracks"].append({"repo": r.get("name"), "common": r.get("common"), "name": c["name"],
+                                "goal": c.get("goal"), "status": c.get("status")})
+    for u in snap.get("unmanaged", []):
+        nodes.setdefault(u["session_id"], {"session_id": u["session_id"], "name": u.get("name"),
+                                           "live": True, "status": u.get("status"),
+                                           "title": u.get("title"), "cwd": u.get("cwd"),
+                                           "tracks": []})
+    for n in nodes.values():
+        sid = n["session_id"]
+        n["agents"] = agentsmod.subagents(sid, n["live"]) if sid else []
+        n["doing"] = agentsmod.session_doing(sid) if sid and n["live"] \
+            and (sessions.get(sid) or {}).get("status") == "busy" else None
+    links = []
+    since = store.now() - agentsmod.WINDOW
+    for r in snap["repos"]:
+        common = r.get("common")
+        if not common:
+            continue
+        names = {c["name"] for c in r.get("tracks", [])}
+        entries = store.read_log(common)
+        accepted = {e.get("ref") for e in entries if e.get("type") == "accept"}
+        for e in entries:
+            if e.get("type") == "accept" or not e.get("to") or e.get("at", 0) < since:
+                continue
+            if e.get("from") in names and e.get("to") in names and e["from"] != e["to"]:
+                links.append({"kind": "message", "repo": r.get("name"), "common": common,
+                              "from": e["from"], "to": e["to"], "type": e.get("type"),
+                              "text": (e.get("text") or "")[:200], "at": e.get("at"),
+                              "accepted": e.get("id") in accepted})
+        for o in r.get("overlaps", []):
+            links.append({"kind": "overlap", "repo": r.get("name"), "common": common,
+                          "from": o["a"], "to": o["b"], "shared": o["shared"][:20],
+                          "conflicts": o.get("conflicts") or []})
+    return {"generated_at": store.now(), "sessions": list(nodes.values()), "links": links}
+
+
 def track_detail(common: str, name: str, diff_cap: int = 200_000) -> Optional[dict]:
     cfg = store.load_config(common)
     t = store.load_track(common, name)
@@ -224,11 +275,13 @@ def track_detail(common: str, name: str, diff_cap: int = 200_000) -> Optional[di
     acts = [e for e in store.tail_jsonl(store.activity_path(common), 524288)
             if e.get("track") == name][-200:]
     thread = [e for e in store.read_log(common) if e.get("from") == name or e.get("to") == name]
+    agent = _session_view(t.get("agent"), identity.sessions_by_id())
     return {"track": t, "base": base, "commits": commits, "numstat": numstat,
             "diff": diff[:diff_cap], "diff_truncated": len(diff) > diff_cap,
             "wip": wip[:diff_cap], "wip_truncated": len(wip) > diff_cap, "dirty": dirty,
-            "activity": acts, "log": thread[-100:],
-            "agent": _session_view(t.get("agent"), identity.sessions_by_id())}
+            "activity": acts, "log": thread[-100:], "agent": agent,
+            "subagents": agentsmod.subagents(agent["session_id"], agent["live"])
+            if agent["session_id"] else []}
 
 
 def activity(since: int) -> list[dict]:

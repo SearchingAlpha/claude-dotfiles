@@ -85,6 +85,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "unknown repo"}, 404)
                 d = board.track_detail(common, q.get("track", ""))
                 return self._json(d) if d else self._json({"error": "unknown track"}, 404)
+            if u.path == "/api/agents":
+                return self._json(board.agents_graph())
             if u.path == "/api/activity":
                 since = int(q.get("since") or store.now() - 7200)
                 return self._json({"events": board.activity(since)})
