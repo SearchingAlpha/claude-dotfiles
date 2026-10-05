@@ -32,17 +32,17 @@ flowchart TD
   server --> life
 ```
 
-Both groups share the state in the repository's git dir; only the lifecycle touches branches and the review host:
+Both groups share the state in the repository's git dir and read Claude Code's own session files (dotted: the registry for who is live, transcripts for titles and subagents); only the lifecycle touches branches and the review host:
 
 ```mermaid
 flowchart LR
   rules["rules<br/>policy · hooks"]
   life["lifecycle<br/>tracks · board · review"]
-  reg[("session registry<br/>~/.claude/sessions")]
+  reg[("Claude Code session data<br/>~/.claude/sessions · projects/")]
   state[("state<br/>.git/shepherd/")]
   git[("worktrees + branches")]
   host[["review host<br/>via a backend"]]
-  rules -. "who is live" .-> reg
+  rules -.-> reg
   life -.-> reg
   rules -- "reads tracks, logs activity" --> state
   life -- "reads / writes" --> state
@@ -61,7 +61,8 @@ flowchart LR
 | `shep/hooks.py` | Adapters from Claude Code hook JSON and git hook argv to the rules; git hook stub installer. |
 | `shep/tracks.py` | The lifecycle commands: `init`, `start`, `adopt`, `resume`, `pause`, `log`, `sync`, `pr`, `finish`. |
 | `shep/review.py`, `shep/backends/` | Backend protocol, loader, built-in GitHub backend — [backends.md](backends.md). |
-| `shep/board.py` | The snapshot behind `shepherd status` and the dashboard. |
+| `shep/board.py` | The snapshot behind `shepherd status` and the dashboard; `agents_graph()` for the Agents tab. |
+| `shep/agents.py` | Each session's subagents and every agent's current step, read from the transcripts Claude Code keeps (`~/.claude/projects/<project>/<session>/subagents/agent-<id>.{jsonl,meta.json}`). |
 | `shep/server.py` | `127.0.0.1` HTTP server (token cookie, read-only JSON API) and the review poller thread. |
 | `shep/cli.py` | argparse front end, text rendering, `doctor`. |
 | `static/` | Dashboard UI: vanilla JS, no build step, no CDN, DOM built with `textContent` only. |
@@ -221,7 +222,7 @@ sequenceDiagram
   end
 ```
 
-The snapshot is local only — git and state files, no network; review states come from what the poller stored. Overlaps are computed from each working track's changed and uncommitted files, and `git merge-tree` runs only for pairs that share committed files (cached by the sha pair). The server answers only `Host: 127.0.0.1|localhost|[::1]` (against DNS rebinding), requires the token cookie set by the printed `?t=` URL, sends a strict CSP, and has no endpoint that changes anything. `shepherd serve --daemon` reuses a running server only if its version and code location match.
+The snapshot is local only — git and state files, no network; review states come from what the poller stored. The Agents tab polls `/api/agents` (`board.agents_graph`): every session on the board with its subagent tree from `agents.py`, plus links between tracks — log messages from the last 24 h and the overlaps. A subagent's status comes from its transcript: *done* when its last turn ended without a tool call, *stopped* when the user stopped it, *interrupted* when its session is no longer live, *stalled* after 15 minutes of silence, else *running*. Overlaps are computed from each working track's changed and uncommitted files, and `git merge-tree` runs only for pairs that share committed files (cached by the sha pair). The server answers only `Host: 127.0.0.1|localhost|[::1]` (against DNS rebinding), requires the token cookie set by the printed `?t=` URL, sends a strict CSP, and has no endpoint that changes anything. `shepherd serve --daemon` reuses a running server only if its version and code location match.
 
 ## Failing open
 

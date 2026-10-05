@@ -134,12 +134,13 @@ What you run:
 
 ## The dashboard
 
-- **Fleet** — one lane per enrolled repo, cards in *Active / In review / Merged — needs finish / Paused*. A card shows the session (live, idle or ended), the goal, the session's own title for its work, ahead/behind main, uncommitted files, the last commit and edit, and the review with its checks. The lane header warns about unpushed commits on main and uncommitted files in the main checkout; below the cards come worktrees that aren't tracks and pairs of tracks touching the same files. A last lane lists running sessions that aren't on any track.
-- **Track detail** (click a card) — commits, per-file diff against main, uncommitted diff, the review, the coordination log and the edit timeline.
+- **Fleet** — one lane per enrolled repo, cards in *Active / In review / Merged — needs finish / Paused*. A card shows the session (live, idle or ended), the goal, the session's own title for its work, ahead/behind main, uncommitted files, the last commit and edit, how many subagents it has running or finished, and the review with its checks. The lane header warns about unpushed commits on main and uncommitted files in the main checkout; below the cards come worktrees that aren't tracks and pairs of tracks touching the same files. A last lane lists running sessions that aren't on any track.
+- **Track detail** (click a card) — commits, per-file diff against main, uncommitted diff, the review, the session's subagents, the coordination log and the edit timeline.
 - **Overlaps** — a matrix of the tracks in each repo: how many files each pair both touches, red when merging them would conflict.
+- **Agents** — every session fanning out to the subagents it spawned (and theirs), each with what it's doing now (its latest tool call) and a status: *running*, *done*, *stalled* (silent for 15 minutes), *interrupted* (its session ended) or *stopped*. Arcs join tracks that messaged each other through the log or share files. Finished subagents older than 24 h drop off.
 - **Activity** — the last two hours of edits, one swimlane per session.
 
-It refreshes every 3 s while the tab is visible and re-checks reviews every 2 minutes. It only listens on 127.0.0.1, needs the token from the printed URL, and changes nothing.
+Fleet and Agents refresh every 3 s while the tab is visible, track detail and Activity every 10 s, and reviews are re-checked every 2 minutes. The dashboard only listens on 127.0.0.1, needs the token from the printed URL, and changes nothing.
 
 ## Common situations
 
