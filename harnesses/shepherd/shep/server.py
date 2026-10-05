@@ -149,7 +149,8 @@ def serve(port: int = 7799, quiet: bool = False) -> None:
     httpd.token = token
     port = httpd.server_address[1]
     store.write_json(server_file(), {"pid": os.getpid(), "port": port, "token": token,
-                                     "version": VERSION, "started_at": store.now()}, mode=0o600)
+                                     "version": VERSION, "root": str(STATIC.parent),
+                                     "started_at": store.now()}, mode=0o600)
     poller = Poller()
     poller.start()
     if not quiet:
@@ -206,7 +207,7 @@ def stop() -> bool:
 
 def daemon(port: int = 7799) -> str:
     info = running()
-    if info and info.get("version") == VERSION:
+    if info and info.get("version") == VERSION and info.get("root") == str(STATIC.parent):
         return url_text(info["port"], info["token"])
     if info:
         stop()
