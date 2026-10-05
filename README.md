@@ -21,6 +21,7 @@ claude-dotfiles/
 │   ├── grilling/
 │   ├── grill-me/
 │   ├── writing-great-skills/
+│   ├── writing-docs/            # documentación con base en el código + diagramas Mermaid verificados
 │   ├── diagnosing-bugs/
 │   ├── tdd/
 │   ├── prototype/
@@ -127,6 +128,7 @@ Las skills se instalan como plugin local (el repo es marketplace + plugin): `cla
 | `domain-modeling` | model-invoked | Construye y afina el modelo de dominio: desafía términos, captura CONTEXT.md y ADRs. |
 | `to-issues` | user-invoked | Rompe un plan/PRD en issues independientes usando vertical slices (tracer bullets). |
 | `code-review` | model-invoked | Review en dos ejes paralelos: Standards (smells + convenciones) y Spec (¿implementa lo pedido?). |
+| `writing-docs` | model-invoked | Escribe o mejora documentación (READMEs, guías, arquitectura, referencia) con cada dato comprobado en el código y diagramas Mermaid que se renderizan en GitHub; `scripts/check_docs.py` renderiza cada diagrama con mermaid-cli y revisa los enlaces. |
 
 ### Diseño frontend
 
@@ -148,29 +150,27 @@ Fuente: [mattpocock/skills](https://github.com/mattpocock/skills)
 ## shepherd — sesiones en paralelo, visibles y con review
 
 `harnesses/shepherd/` (stdlib, Python 3.9+). Cada sesión de Claude Code trabaja en
-una **track**: su rama, su worktree y los paths que posee. El trabajo llega a la
+una **track** —su rama, su worktree y los paths que posee— y su trabajo llega a la
 rama principal solo por una review (PR en GitHub; otros hosts con un backend
-privado). Un dashboard local enseña qué desarrolla cada sesión.
+privado). Un dashboard local (`/shepherd`) enseña qué desarrolla cada sesión.
 
-- **Inscribir un repo** (lo hace el usuario, en su checkout):
-  `shepherd init` (modo `observe`: solo avisa) → `shepherd mode enforce` (bloquea
-  ediciones y commits de agentes en la rama protegida y en worktrees de otras
-  sesiones). Instala tres git hooks que solo actúan dentro de sesiones de Claude
-  Code: tus commits manuales no cambian. `shepherd uninit` lo deshace.
-- **Agentes**: siguen la skill `parallel-sessions` — `shepherd start <track> --goal … --owns …`,
-  `EnterWorktree`, commits por nombre, `shepherd pr`, y tras el merge `shepherd finish`.
-- **Dashboard**: `/shepherd` o `shepherd serve --daemon` → URL con token en
-  `127.0.0.1:7799` (reenvía el puerto si trabajas en una máquina remota).
-- **Estado**: `<git-common-dir>/shepherd/` por repo (nunca se commitea, lo comparten
-  todos los worktrees) y `~/.claude/shepherd/` por máquina. `claude-sessions.md` es
-  una vista generada.
-- **Backends de review privados**: cualquier `*.py` en `~/.claude/shepherd/backends/`
-  (o en `SHEPHERD_BACKENDS`) con `SHEPHERD_API = 1` y `BACKEND`; ver
-  `harnesses/shepherd/README.md`. Las skills de `skills-amazon/*/` se enlazan en
-  `~/.claude/skills/` y ejecutan su `install.sh` desde `install.sh`, sin aparecer en
-  `plugin.json`.
-- **Tests**: `python3 -m unittest discover -s harnesses/shepherd/tests -t harnesses/shepherd/tests`.
-- `shepherd doctor` revisa la instalación, los hooks de cada repo y los backends.
+```mermaid
+flowchart LR
+  s(["Sesión de Claude"]) -- "shepherd start" --> t["track<br/>rama + worktree"]
+  t -- "shepherd pr" --> r[["PR / review"]]
+  tu(["Tú"]) -- "revisas y mergeas" --> r
+  r -- "merge" --> m["rama principal<br/>(protegida)"]
+  t -. "shepherd finish" .-> fin(["worktree y rama borrados"])
+```
+
+- **Guía de uso** (inscribir un repo, el día a día, qué se bloquea, comandos,
+  situaciones comunes): [harnesses/shepherd/README.md](harnesses/shepherd/README.md).
+- **Cómo está hecho**: [docs/architecture.md](harnesses/shepherd/docs/architecture.md);
+  **backends de review**: [docs/backends.md](harnesses/shepherd/docs/backends.md).
+- **Lo que siguen los agentes**: la skill [`parallel-sessions`](skills/parallel-sessions/SKILL.md).
+- **Backends privados en este repo**: las carpetas de `skills-amazon/*/` con `SKILL.md`
+  se enlazan en `~/.claude/skills/` y ejecutan su `install.sh` desde `install.sh`, sin
+  aparecer en `plugin.json`.
 
 ## Móvil / claude.ai web
 
