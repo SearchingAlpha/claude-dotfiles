@@ -10,11 +10,12 @@ y se replican al directorio de usuario de Claude Code mediante scripts de instal
 
 ```
 claude-dotfiles/
-├── commands/                    # slash commands (resolver, autobuild, builds, post, hs-*)
+├── commands/                    # slash commands (resolver, autobuild, builds, shepherd, post, hs-*)
 ├── hackspain-starter/           # kit HackSpain 2026: scaffold Python + playbooks + cheat sheets
 ├── harnesses/
 │   ├── autonomous-coding/       # harness de 3 agentes (se ejecuta in-place, no lo instala install.sh)
 │   ├── eval-inspect/            # harness de evaluación formal de agentes con Inspect AI
+│   ├── shepherd/                # tracks + reviews + dashboard para sesiones de Claude Code en paralelo
 │   └── tools/                   # utilidades compartidas (harness.py CLI, repomap.py, init_project.py multi-IDE)
 ├── skills/                      # skills generales
 │   ├── grilling/
@@ -31,8 +32,10 @@ claude-dotfiles/
 │   ├── roast-my-post/
 │   └── impeccable/              # design fluency frontend (pbakaus/impeccable, Apache 2.0)
 ├── agents/                      # subagentes del plugin (impeccable-*)
+├── hooks/hooks.json             # hooks del plugin (shepherd; inertes fuera de repos inscritos)
 ├── skills-amazon/               # skills internas Amazon — GITIGNORED, nunca commitear
-│   └── README.md
+│   ├── README.md
+│   └── shepherd-*/              # backends de review privados de shepherd (no en git)
 ├── .claude-plugin/plugin.json   # manifiesto del plugin de skills
 ├── .gitignore                   # excluye skills-amazon/
 ├── install.ps1                  # instala en Windows
@@ -87,6 +90,7 @@ cd ~/claude-dotfiles
 | `/eval` | Evaluador adversarial en sesión: adopta el rol de Evaluator escéptico independiente para intentar refutar que el cambio funciona mediante pruebas reales. |
 | `/autobuild` | Lanza el harness autónomo de 3 agentes (Planner / Generator / Evaluator) sobre una spec. |
 | `/builds` | Dashboard de solo lectura de las sesiones del harness. |
+| `/shepherd` | Abre el dashboard de shepherd (qué desarrolla cada sesión, su rama, su review, conflictos previstos) y resume lo accionable. `stop` / `doctor`. |
 | `/post` | Bucle de contenido "Show Your Work" para LinkedIn/X sobre el vault de Obsidian. Un paso por invocación. |
 | `/hs-frame` | HackSpain, hora 1: del texto del reto a un Framing Brief (one-liner, demo moment, tracer bullet, impacto, tracks). Sin código. |
 | `/hs-demo` | HackSpain: guion de demo con golden path, pre-warm, escalera de fallback y reparto driver/narrador. |
@@ -109,7 +113,7 @@ Las skills se instalan como plugin local (el repo es marketplace + plugin): `cla
 | `grilling` | model-invoked | Entrevista relentless sobre cada aspecto de un plan hasta resolver todas las decisiones. |
 | `grill-me` | user-invoked | Lanza una sesión `/grilling`. |
 | `handoff` | user-invoked | Compacta la conversación en un doc de continuidad para la próxima sesión. |
-| `parallel-sessions` | model-invoked | Coordina varias sesiones de Claude Code en el mismo repo: ledger compartido de quién es dueño de qué, un worktree por sesión, hábitos de git seguros. |
+| `parallel-sessions` | model-invoked | Coordina varias sesiones de Claude Code en el mismo repo con shepherd: cada sesión reclama una track (rama + worktree + paths que posee), trabaja solo ahí y termina en una review; mensajes entre tracks por el log de shepherd. |
 | `writing-great-skills` | user-invoked | Referencia para escribir y editar skills — vocabulario y principios de predictabilidad. |
 | `roast-my-post` | user-invoked | Gallo/roaster de borradores (LinkedIn/social, ES o EN): puntúa cuánto suena a IA, destroza los tells citando tu texto, y lo reescribe con voz humana. |
 
@@ -140,6 +144,33 @@ Para actualizar: clonar `pbakaus/impeccable`, copiar `plugin/skills/impeccable` 
 encima, y revisar el diff.
 
 Fuente: [mattpocock/skills](https://github.com/mattpocock/skills)
+
+## shepherd — sesiones en paralelo, visibles y con review
+
+`harnesses/shepherd/` (stdlib, Python 3.9+). Cada sesión de Claude Code trabaja en
+una **track**: su rama, su worktree y los paths que posee. El trabajo llega a la
+rama principal solo por una review (PR en GitHub; otros hosts con un backend
+privado). Un dashboard local enseña qué desarrolla cada sesión.
+
+- **Inscribir un repo** (lo hace el usuario, en su checkout):
+  `shepherd init` (modo `observe`: solo avisa) → `shepherd mode enforce` (bloquea
+  ediciones y commits de agentes en la rama protegida y en worktrees de otras
+  sesiones). Instala tres git hooks que solo actúan dentro de sesiones de Claude
+  Code: tus commits manuales no cambian. `shepherd uninit` lo deshace.
+- **Agentes**: siguen la skill `parallel-sessions` — `shepherd start <track> --goal … --owns …`,
+  `EnterWorktree`, commits por nombre, `shepherd pr`, y tras el merge `shepherd finish`.
+- **Dashboard**: `/shepherd` o `shepherd serve --daemon` → URL con token en
+  `127.0.0.1:7799` (reenvía el puerto si trabajas en una máquina remota).
+- **Estado**: `<git-common-dir>/shepherd/` por repo (nunca se commitea, lo comparten
+  todos los worktrees) y `~/.claude/shepherd/` por máquina. `claude-sessions.md` es
+  una vista generada.
+- **Backends de review privados**: cualquier `*.py` en `~/.claude/shepherd/backends/`
+  (o en `SHEPHERD_BACKENDS`) con `SHEPHERD_API = 1` y `BACKEND`; ver
+  `harnesses/shepherd/README.md`. Las skills de `skills-amazon/*/` se enlazan en
+  `~/.claude/skills/` y ejecutan su `install.sh` desde `install.sh`, sin aparecer en
+  `plugin.json`.
+- **Tests**: `python3 -m unittest discover -s harnesses/shepherd/tests -t harnesses/shepherd/tests`.
+- `shepherd doctor` revisa la instalación, los hooks de cada repo y los backends.
 
 ## Móvil / claude.ai web
 
