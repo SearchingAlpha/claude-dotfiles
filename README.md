@@ -22,6 +22,8 @@ claude-dotfiles/
 │   ├── grill-me/
 │   ├── writing-great-skills/
 │   ├── writing-docs/            # documentación con base en el código + diagramas Mermaid verificados
+│   ├── live-coding/             # bucle de live-coding con agente + patrones de cambios en apps con LLM
+│   ├── agent-harness/           # check + hook de tests tras cada edición + permisos + CLAUDE.md
 │   ├── diagnosing-bugs/
 │   ├── tdd/
 │   ├── prototype/
@@ -129,6 +131,8 @@ Las skills se instalan como plugin local (el repo es marketplace + plugin): `cla
 | `to-issues` | user-invoked | Rompe un plan/PRD en issues independientes usando vertical slices (tracer bullets). |
 | `code-review` | model-invoked | Review en dos ejes paralelos: Standards (smells + convenciones) y Spec (¿implementa lo pedido?). |
 | `writing-docs` | model-invoked | Escribe o mejora documentación (READMEs, guías, arquitectura, referencia) con cada dato comprobado en el código y diagramas Mermaid que se renderizan en GitHub; `scripts/check_docs.py` renderiza cada diagrama con mermaid-cli y revisa los enlaces. |
+| `live-coding` | model-invoked | Bucle de live-coding con un agente delante de público (entrevista, pairing): encuadre, plan, test en rojo, cambio mínimo, check, evidencia, commit pequeño. Incluye orientación en repos desconocidos y patrones para cambios en apps con LLM (tool, guardrail, eval, router, integraciones, MCP, A/B). |
+| `agent-harness` | model-invoked | Deja un repo listo para agentes de código: un comando de check, un hook PostToolUse que ejecuta los tests tras cada edición (tolera el rojo de TDD), permisos y un `CLAUDE.md` con comandos, reglas, seams y gotchas. |
 
 ### Diseño frontend
 
