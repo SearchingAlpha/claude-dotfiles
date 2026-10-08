@@ -1,12 +1,14 @@
 """herd against a fake Claude config dir (live and dead sessions, transcripts) and a
 private tmux server, so nothing touches the real ~/.claude or your tmux sessions."""
 
+import http.client
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -146,6 +148,165 @@ class TestHelpers(unittest.TestCase):
 
     def test_ago(self):
         self.assertEqual([herd.ago(s) for s in (5, 125, 7300, 200000)], ["5s", "2m", "2h", "2d"])
+
+
+def tool_turn(name="Bash", **inp) -> dict:
+    return {"type": "assistant", "message": {"stop_reason": "tool_use", "content": [
+        {"type": "text", "text": "…"}, {"type": "tool_use", "name": name, "input": inp}]}}
+
+
+def text_turn(text="all done", stop="end_turn") -> dict:
+    return {"type": "assistant", "message": {"stop_reason": stop, "content": [{"type": "text", "text": text}]}}
+
+
+def user_text(text) -> dict:
+    return {"type": "user", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def write_jsonl(path: Path, *records, age=0):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    if age:
+        t = time.time() - age
+        os.utime(path, (t, t))
+
+
+SCRIPT = """export const meta = {
+  name: 'my-flow',
+  description: 'Build then verify',
+  phases: [
+    { title: 'Build', detail: 'two builders' },
+    { title: "Verify" },
+  ],
+}
+const x = phase('Build')
+"""
+
+
+class TestWorkflows(Sandbox):
+    def setUp(self):
+        super().setUp()
+        self.s = self.session("lead", "busy")
+        self.dir = self.claude / "projects" / "-proj" / self.s["sessionId"]
+
+    def detail(self) -> dict:
+        return herd.sessions(detail=True)[0]
+
+    def test_running_workflow_from_script_and_journal(self):
+        run = "wf_1234abcd-5ef"
+        (self.dir / "workflows" / "scripts").mkdir(parents=True)
+        (self.dir / "workflows" / "scripts" / f"my-flow-{run}.js").write_text(SCRIPT)
+        rd = self.dir / "subagents" / "workflows" / run
+        write_jsonl(rd / "journal.jsonl", {"type": "launched"},
+                    {"type": "started", "key": "k1", "agentId": "a1", "label": "build:a", "phase": "Build"},
+                    {"type": "result", "key": "k1", "agentId": "a1", "result": {"big": "x" * 1000}},
+                    {"type": "started", "key": "k2", "agentId": "a2", "label": "build:b", "phase": "Build"},
+                    {"type": "started", "key": "k3", "agentId": "a3", "label": "check", "phase": "Verify"},
+                    {"type": "failed", "key": "k3", "agentId": "a3"})
+        write_jsonl(rd / "agent-a2.jsonl", user_text("go"), tool_turn(description="run the tests"))
+        [w] = self.detail()["workflows"]
+        self.assertEqual((w["name"], w["description"], w["status"], w["agent_count"]),
+                         ("my-flow", "Build then verify", "running", 3))
+        build, verify = w["phases"]
+        self.assertEqual((build["title"], verify["title"]), ("Build", "Verify"))
+        self.assertEqual(build["counts"]["done"], 1)
+        b = next(a for a in build["agents"] if a["id"] == "a2")
+        self.assertEqual((b["status"], b["doing"]), ("running", "Bash: run the tests"))
+        self.assertEqual(verify["agents"][0]["status"], "failed")
+
+    def test_finished_stalled_and_aged_out(self):
+        now = time.time()
+        old = self.claude / "projects" / "-other" / self.s["sessionId"] / "workflows"
+        old.mkdir(parents=True)                 # a second project dir of the same session
+        (old / "wf_00000000-001.json").write_text(json.dumps({
+            "workflowName": "nightly", "status": "completed", "startTime": int((now - 3600) * 1000),
+            "durationMs": 600_000, "totalTokens": 1_500_000, "phases": [{"title": "Only"}]}))
+        (old / "wf_00000000-002.json").write_text(json.dumps({
+            "workflowName": "ancient", "status": "killed", "startTime": int((now - 3 * 86400) * 1000),
+            "durationMs": 1000}))
+        rd = self.dir / "subagents" / "workflows" / "wf_00000000-003"
+        write_jsonl(rd / "agent-s1.jsonl", tool_turn(), age=1800)
+        write_jsonl(rd / "journal.jsonl", {"type": "started", "key": "k", "agentId": "s1",
+                                           "label": "slow", "phase": "Work"}, age=1800)
+        by_name = {w["name"]: w for w in self.detail()["workflows"]}
+        self.assertEqual(set(by_name), {"nightly", "wf_00000000-003"})
+        self.assertEqual((by_name["nightly"]["status"], by_name["nightly"]["elapsed"],
+                          by_name["nightly"]["tokens"]), ("completed", 600, 1_500_000))
+        stalled = by_name["wf_00000000-003"]
+        self.assertEqual(stalled["status"], "stalled")
+        self.assertEqual(stalled["phases"][0]["agents"][0]["status"], "stalled")
+
+    def test_subagent_states(self):
+        sub = self.dir / "subagents"
+        cases = {
+            "done": [text_turn()],
+            "quiet": [text_turn(stop=None)],
+            "handback": [tool_turn("SubagentHandback"), {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "x", "content": "ok"}]}}],
+            "stopped": [tool_turn(), user_text("[Request interrupted by user]")],
+            "running": [tool_turn(description="lint")],
+            "stalled": [tool_turn()],
+            "aged": [text_turn()],
+        }
+        ages = {"stalled": 1800, "aged": 2 * 86400, "quiet": 120}
+        for name, turns in cases.items():
+            (sub / f"agent-{name}.meta.json").parent.mkdir(parents=True, exist_ok=True)
+            (sub / f"agent-{name}.meta.json").write_text(json.dumps({"agentType": "Explore", "description": name}))
+            write_jsonl(sub / f"agent-{name}.jsonl", *turns, age=ages.get(name, 0))
+        (sub / "agent-wf.meta.json").write_text(json.dumps({"agentType": "workflow-subagent"}))
+        got = {a["description"]: a["status"] for a in self.detail()["agents"]}
+        self.assertEqual(got, {"done": "done", "quiet": "done", "handback": "done", "stopped": "stopped",
+                               "running": "running", "stalled": "stalled"})
+
+    def test_plain_list_skips_detail(self):
+        self.assertNotIn("workflows", herd.sessions()[0])
+
+
+class TestServer(Sandbox):
+    def setUp(self):
+        super().setUp()
+        os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "config")
+        self.session("one", "waiting", waitingFor="dialog open")
+        self.server = herd.ThreadingHTTPServer(("127.0.0.1", 0), herd.Handler)
+        self.server.token = herd.token()
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        super().tearDown()
+
+    def get(self, path, host="127.0.0.1", cookie=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=10)
+        headers = {"Host": f"{host}:{self.server.server_address[1]}"}
+        if cookie:
+            headers["Cookie"] = f"herd={cookie}"
+        conn.request("GET", path, headers=headers)
+        r = conn.getresponse()
+        return r.status, dict(r.getheaders()), r.read()
+
+    def test_token_is_private_and_stable(self):
+        path = self.tmp / "config" / "herd" / "token"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(herd.token(), self.server.token)
+
+    def test_auth_and_api(self):
+        tok = self.server.token
+        self.assertEqual(self.get("/")[0], 401)
+        self.assertEqual(self.get("/api/sessions", cookie="wrong")[0], 401)
+        self.assertEqual(self.get(f"/?t={tok}", host="evil.example")[0], 403)
+        status, headers, _ = self.get(f"/?t={tok}")
+        self.assertEqual(status, 302)
+        self.assertIn("HttpOnly", headers["Set-Cookie"])
+        status, _, body = self.get("/api/sessions", cookie=tok)
+        self.assertEqual(status, 200)
+        [s] = json.loads(body)["sessions"]
+        self.assertEqual((s["state"], s["waiting_for"], s["workflows"], s["agents"]),
+                         ("blocked", "dialog open", [], []))
+        self.assertEqual(self.get("/", cookie=tok)[0], 200)
+        self.assertEqual(self.get("/static/app.js", cookie=tok)[0], 200)
+        self.assertEqual(self.get("/static/..%2fherd.py", cookie=tok)[0], 404)
+        self.assertEqual(self.get("/static/../herd.py", cookie=tok)[0], 404)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux not installed")

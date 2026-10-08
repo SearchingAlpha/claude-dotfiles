@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>herd</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <span class="brand"><img src="/static/favicon.svg" alt="" width="18" height="18"><span class="brand-name">herd</span></span>
+  <span class="counts" id="counts" aria-live="polite"></span>
+  <label class="toggle"><input type="checkbox" id="quiet"> Hide sessions with nothing running</label>
+  <button type="button" class="btn" id="notify" hidden>Notify me when one blocks</button>
+  <span class="status" id="status" aria-live="polite"></span>
+</header>
+<main id="app"><p class="empty">Loading…</p></main>
+</body>
+</html>
