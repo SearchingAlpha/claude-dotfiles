@@ -5,7 +5,7 @@
     herd watch [-n SECS] [--no-bell]         the same, redrawn; rings when a session blocks
     herd new <name> [dir] [-- claude args…]  start claude in a detached tmux session
     herd go <name>                           attach (or switch) to a session's tmux pane
-    herd serve [-p PORT]                     dashboard on 127.0.0.1: sessions, workflows below
+    herd serve [-p PORT]                     dashboard on 127.0.0.1: the list, and a graph view
 
 Read-only over what Claude Code already writes: its session registry
 (~/.claude/sessions/<pid>.json), transcript tails and workflow journals. No hooks and
@@ -1432,7 +1432,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("dir", nargs="?", default=".")
     p = sub.add_parser("go", help="attach to a session's tmux pane")
     p.add_argument("name")
-    p = sub.add_parser("serve", help="dashboard on localhost: sessions with their workflows")
+    p = sub.add_parser("serve", help="dashboard on localhost: sessions, their workflows, and a graph")
     p.add_argument("-p", "--port", type=int, default=7798)
     if not argv or argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
         argv = ["ls", *argv]
