@@ -157,6 +157,44 @@ class TestHelpers(unittest.TestCase):
     def test_ago(self):
         self.assertEqual([herd.ago(s) for s in (5, 125, 7300, 200000)], ["5s", "2m", "2h", "2d"])
 
+    def test_grow_reads_only_new_complete_lines(self):
+        tmp = Path(tempfile.mkdtemp(prefix="herd-grow-"))
+        try:
+            path, cache = tmp / "t.jsonl", {}
+            grow = lambda: herd._grow(path, cache, (b"hit",), list, lambda ln, acc: acc.append(ln))  # noqa: E731
+            path.write_bytes(b"hit 1\nmiss\nhit 2\nhit 3 half")
+            self.assertEqual(grow(), [b"hit 1", b"hit 2"])
+            with open(path, "ab") as f:
+                f.write(b" done\nhit 4\n")
+            self.assertEqual(grow(), [b"hit 1", b"hit 2", b"hit 3 half done", b"hit 4"])
+            self.assertEqual(cache[path][1], path.stat().st_size)
+            path.write_bytes(b"hit a\n")                         # rewritten shorter: start over
+            self.assertEqual(grow(), [b"hit a"])
+            other = tmp / "new.jsonl"
+            other.write_bytes(b"hit a\nhit b\nhit c\n")
+            os.replace(other, path)                              # replaced (new inode): start over
+            self.assertEqual(grow(), [b"hit a", b"hit b", b"hit c"])
+            self.assertEqual(herd._grow(tmp / "gone", cache, (b"hit",), list, None), [])
+            saved, herd.BLOCK = herd.BLOCK, 4            # lines longer than a read block
+            try:
+                self.assertEqual(herd._grow(path, {}, (b"hit",), list, lambda ln, acc: acc.append(ln)),
+                                 [b"hit a", b"hit b", b"hit c"])
+            finally:
+                herd.BLOCK = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_first_stamp_skips_records_without_one(self):
+        tmp = Path(tempfile.mkdtemp(prefix="herd-stamp-"))
+        try:
+            path = tmp / "agent.jsonl"
+            write_jsonl(path, {"type": "fork-context-ref", "agentId": "a"},
+                        {"type": "user", "timestamp": "2026-10-08T18:42:41.000Z"})
+            self.assertEqual(herd._first_stamp(path), herd._epoch("2026-10-08T18:42:41.000Z"))
+            self.assertEqual(herd._first_stamp(tmp / "missing.jsonl"), 0.0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 def tool_turn(name="Bash", **inp) -> dict:
     return {"type": "assistant", "message": {"stop_reason": "tool_use", "content": [

@@ -91,6 +91,11 @@ def _transcript(session_id: str) -> Optional[Path]:
     return next((claude_dir() / "projects").glob(f"*/{session_id}.jsonl"), None)
 
 
+def _main_transcripts(session_id: str) -> list[Path]:
+    """Every main transcript of a session: one per project dir it has worked in."""
+    return sorted((claude_dir() / "projects").glob(f"*/{session_id}.jsonl"))
+
+
 def _tail(path: Optional[Path], enough) -> list[dict]:
     """A transcript's last records, newest first: 64 KB, growing ×4 up to 4 MB until
     enough(records) holds — only a huge record at the end needs more than one read."""
@@ -151,6 +156,71 @@ def tail_turns(path: Path) -> list[dict]:
     if len(_turns_cache) > 4000:
         _turns_cache.pop(next(iter(_turns_cache)))
     return turns
+
+
+BLOCK = 8 * 1048576
+
+
+def _grow(path: Path, cache: dict, needles: tuple, fresh, fold):
+    """fold(line, acc) over each complete line appended to `path` since the last call that
+    holds one of `needles`; returns acc. Transcripts only grow, so each poll reads just the
+    new bytes; a half-written last line waits for the next poll, and a replaced or shrunk
+    file is read again from the start."""
+    try:
+        st = path.stat()
+    except OSError:
+        return fresh()
+    seen = cache.get(path)
+    if not seen or seen[0] != st.st_ino or seen[1] > st.st_size:
+        seen = (st.st_ino, 0, fresh())
+    ino, pos, acc = seen
+    if st.st_size > pos:
+        try:
+            with open(path, "rb") as f:
+                f.seek(pos)
+                carry, left = b"", st.st_size - pos
+                while left > 0:
+                    chunk = f.read(min(BLOCK, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+                    data = carry + chunk
+                    end = data.rfind(b"\n") + 1
+                    for ln in data[:end].split(b"\n"):
+                        if any(n in ln for n in needles):
+                            fold(ln, acc)
+                    pos += end
+                    carry = data[end:]
+        except OSError:
+            pass
+        cache[path] = (ino, pos, acc)
+        if len(cache) > 4000:
+            cache.pop(next(iter(cache)))
+    return acc
+
+
+_stamp_cache: dict = {}
+
+
+def _first_stamp(path: Path) -> float:
+    """When a transcript began: its first record's timestamp (a fork's first record, the
+    context reference, has none). A file's head never changes, so a hit is kept for good."""
+    if path in _stamp_cache:
+        return _stamp_cache[path]
+    try:
+        with open(path, "rb") as f:
+            for _, ln in zip(range(20), f):
+                try:
+                    rec = json.loads(ln)
+                except ValueError:
+                    continue
+                at = _epoch(rec.get("timestamp")) if isinstance(rec, dict) and rec.get("timestamp") else 0.0
+                if at:
+                    _stamp_cache[path] = at
+                    return at
+    except OSError:
+        pass
+    return 0.0
 
 
 def doing(turns: list[dict], asking: bool = False) -> str:
@@ -324,32 +394,12 @@ def _epoch(stamp) -> float:
 def workflow_launches(session_id: str) -> tuple[list[dict], dict]:
     """Every Workflow tool call in the session's transcripts, oldest first, as
     {at, id, script_path, resume, meta}, and run id → the call that launched it (from the
-    tool result's "Transcript dir: …/<run>"). Transcripts only grow, so each poll reads
-    just the bytes appended since the last one."""
+    tool result's "Transcript dir: …/<run>"), read incrementally."""
     launches: list[dict] = []
     links: dict = {}
-    for path in sorted((claude_dir() / "projects").glob(f"*/{session_id}.jsonl")):
-        try:
-            size = path.stat().st_size
-        except OSError:
-            continue
-        seen = _launch_cache.get(path)
-        if not seen or seen[0] > size:          # new, or rewritten in place: start over
-            seen = (0, [], {})
-        offset, found, linked = seen
-        if size > offset:
-            try:
-                with open(path, "rb") as f:
-                    f.seek(offset)
-                    chunk = f.read(size - offset)
-            except OSError:
-                chunk = b""
-            end = chunk.rfind(b"\n") + 1          # a half-written last line waits for the next poll
-            for ln in chunk[:end].split(b"\n"):
-                if b'"Workflow"' in ln or b"Workflow launched" in ln:
-                    _launch_record(ln, found, linked)
-            offset += end
-            _launch_cache[path] = (offset, found, linked)
+    for path in _main_transcripts(session_id):
+        found, linked = _grow(path, _launch_cache, (b'"Workflow"', b"Workflow launched"),
+                              lambda: ([], {}), lambda ln, acc: _launch_record(ln, *acc))
         launches += found
         links.update(linked)
     launches.sort(key=lambda c: c["at"])
