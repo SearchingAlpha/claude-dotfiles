@@ -811,13 +811,18 @@ def cmd_new(args) -> int:
     return 0
 
 
+def _matches(key: str, r: dict) -> bool:
+    """The row `key` names: its name, title, pid, or a session id prefix of 4+ characters."""
+    return key in (r["name"], r["title"], str(r["pid"])) or \
+        (len(key) >= 4 and r["session_id"].startswith(key))
+
+
 def resolve(key: str, rows: list[dict]) -> Optional[str]:
     """A tmux target for a tmux session name, session name, title, pid or session id prefix."""
     if shutil.which("tmux") and _tmux_has(key):
         return key
     for r in rows:
-        if key in (r["name"], r["title"], str(r["pid"])) or \
-                (len(key) >= 4 and r["session_id"].startswith(key)):
+        if _matches(key, r):
             return r["tmux"] or None
     return None
 
@@ -826,7 +831,7 @@ def cmd_go(args) -> int:
     rows = sessions()
     target = resolve(args.name, rows)
     if not target:
-        hit = next((r for r in rows if args.name in (r["name"], r["title"], str(r["pid"]))), None)
+        hit = next((r for r in rows if _matches(args.name, r)), None)
         why = f"`{args.name}` is not running in tmux (cwd {hit['cwd']})" if hit \
             else f"no session or tmux session called `{args.name}`"
         print(f"herd: {why}", file=sys.stderr)

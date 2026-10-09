@@ -129,6 +129,14 @@ class TestList(Sandbox):
     def test_empty(self):
         self.assertEqual(self.herd().stdout, "no live Claude Code sessions\n")
 
+    def test_go_by_session_prefix_outside_tmux(self):
+        # The dashboard copies `herd go <8-char prefix>`; outside tmux that must say why, not "no session".
+        e = self.session("plain", "idle")
+        r = self.herd("go", e["sessionId"][:8])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not running in tmux", r.stderr)
+        self.assertIn("no session", self.herd("go", e["sessionId"][:3]).stderr)
+
 
 class TestHelpers(unittest.TestCase):
     def test_tmux_target_walks_ancestors(self):
