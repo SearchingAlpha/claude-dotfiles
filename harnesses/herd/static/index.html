@@ -7,19 +7,22 @@
 <link rel="icon" id="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
+<script src="/static/graph.js" defer></script>
 </head>
 <body>
 <header class="top">
   <div class="bar">
-    <span class="brand" title="j/k move · Enter open · c copy herd go · Esc close">herd</span>
+    <span class="brand" title="j/k move · Enter open · c copy herd go · Esc close · g graph">herd</span>
     <span class="verdict" id="verdict" aria-live="polite"></span>
     <span class="counts" id="counts"></span>
+    <button type="button" class="view" id="view" aria-pressed="false" aria-controls="graph">Graph</button>
     <span class="host" id="host" aria-live="polite"></span>
   </div>
 </header>
 <main id="app">
   <p class="note" id="msg">Reading sessions…</p>
 </main>
+<main id="graph" class="graph" hidden aria-label="Sessions, what they started and who they messaged"></main>
 <footer class="foot" id="foot"></footer>
 </body>
 </html>

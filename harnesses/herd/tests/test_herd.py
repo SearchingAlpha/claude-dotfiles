@@ -844,6 +844,9 @@ class TestServer(Sandbox):
         self.assertEqual(set(g), {"now", "host", "window", "nodes", "edges"})
         [n] = g["nodes"]
         self.assertEqual((n["kind"], n["state"], n["waiting_for"], n["parent"]), ("session", "blocked", "dialog open", ""))
+        status, headers, body = self.get("/static/graph.js", cookie=tok)
+        self.assertEqual((status, headers["Content-Type"]), (200, "text/javascript; charset=utf-8"))
+        self.assertIn(b"const graphView", body)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux not installed")
