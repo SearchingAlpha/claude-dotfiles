@@ -186,7 +186,8 @@ const x = phase('Build')
 class TestWorkflows(Sandbox):
     def setUp(self):
         super().setUp()
-        self.s = self.session("lead", "busy")
+        # Started well before the fixtures' file times, or its old runs read as orphaned.
+        self.s = self.session("lead", "busy", startedAt=int((time.time() - 3 * 3600) * 1000))
         self.dir = self.claude / "projects" / "-proj" / self.s["sessionId"]
 
     def detail(self) -> dict:
@@ -228,13 +229,15 @@ class TestWorkflows(Sandbox):
         write_jsonl(rd / "agent-s1.jsonl", tool_turn(), age=1800)
         write_jsonl(rd / "journal.jsonl", {"type": "started", "key": "k", "agentId": "s1",
                                            "label": "slow", "phase": "Work"}, age=1800)
-        by_name = {w["name"]: w for w in self.detail()["workflows"]}
-        self.assertEqual(set(by_name), {"nightly", "wf_00000000-003"})
-        self.assertEqual((by_name["nightly"]["status"], by_name["nightly"]["elapsed"],
-                          by_name["nightly"]["tokens"]), ("completed", 600, 1_500_000))
-        stalled = by_name["wf_00000000-003"]
-        self.assertEqual(stalled["status"], "stalled")
+        by_id = {w["id"]: w for w in self.detail()["workflows"]}
+        self.assertEqual(set(by_id), {"wf_00000000-001", "wf_00000000-003"})
+        nightly = by_id["wf_00000000-001"]
+        self.assertEqual((nightly["name"], nightly["status"], nightly["elapsed"], nightly["tokens"]),
+                         ("nightly", "completed", 600, 1_500_000))
+        stalled = by_id["wf_00000000-003"]
+        self.assertEqual((stalled["name"], stalled["status"]), ("", "stalled"))   # never the run id
         self.assertEqual(stalled["phases"][0]["agents"][0]["status"], "stalled")
+        self.assertEqual(stalled["problems"], {"stalled": 1, "failed": 0})
 
     def test_subagent_states(self):
         sub = self.dir / "subagents"
@@ -260,6 +263,200 @@ class TestWorkflows(Sandbox):
 
     def test_plain_list_skips_detail(self):
         self.assertNotIn("workflows", herd.sessions()[0])
+
+
+def touch(path: Path, age=0, text="{}"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    t = time.time() - age
+    os.utime(path, (t, t))
+
+
+def iso(age=0) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - age))
+
+
+def launch(script_path, age, resume="", tool_id="toolu_1") -> dict:
+    inp = {"scriptPath": str(script_path), **({"resumeFromRunId": resume} if resume else {})}
+    return {"type": "assistant", "timestamp": iso(age), "message": {"content": [
+        {"type": "tool_use", "id": tool_id, "name": "Workflow", "input": inp}]}}
+
+
+def launched(run_dir, tool_id="toolu_1") -> dict:
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id, "content":
+            f"Workflow launched in background. Task ID: w1\nTranscript dir: {run_dir}\nScript file: x.js"}]}}
+
+
+PHASES3 = """export const meta = {
+  name: 'three',
+  description: 'A then B then C',
+  phases: [{ title: 'A' }, { title: 'B' }, { title: 'C' }],
+}
+"""
+
+
+class TestTruth(Sandbox):
+    """The rules that keep the dashboard from showing false problems (SPEC 5)."""
+
+    def setUp(self):
+        super().setUp()
+        # The session's current process started an hour ago; older writes belong to a previous one.
+        self.s = self.session("lead", "busy", startedAt=int((time.time() - 3600) * 1000))
+        self.dir = self.claude / "projects" / "-proj" / self.s["sessionId"]
+
+    def detail(self, sid=None) -> dict:
+        return next(r for r in herd.sessions(detail=True) if r["session_id"] == (sid or self.s["sessionId"]))
+
+    def wf(self, run, *events, age=0, script=None, name="flow", agents=(), meta_age=None):
+        """A run: journal events, agent transcripts {id: (turns, age)}, optional script."""
+        rd = self.dir / "subagents" / "workflows" / run
+        write_jsonl(rd / "journal.jsonl", *events, age=age)
+        for aid, (turns, a_age) in dict(agents).items():
+            write_jsonl(rd / f"agent-{aid}.jsonl", *turns, age=a_age)
+            touch(rd / f"agent-{aid}.meta.json", meta_age if meta_age is not None else a_age + 60)
+        if script:
+            touch(self.dir / "workflows" / "scripts" / f"{name}-{run}.js", meta_age or 0, script)
+        return rd
+
+    def started(self, key, label, phase, aid=None):
+        return {"type": "started", "key": key, "agentId": aid or key, "label": label, "phase": phase}
+
+    def test_orphaned_run_is_interrupted_with_frozen_elapsed(self):
+        self.wf("wf_0000aaaa-001", self.started("k1", "build", "Build"), age=7200, script=SCRIPT,
+                 name="kit", agents={"k1": ([tool_turn()], 7200)}, meta_age=3 * 3600)
+        [w] = self.detail()["workflows"]
+        self.assertEqual(w["status"], "interrupted")
+        self.assertAlmostEqual(w["elapsed"], 3600, delta=5)      # start → last write, not → now
+        self.assertAlmostEqual(w["ended_at"], time.time() - 7200, delta=5)
+        self.assertEqual(w["phases"][0]["counts"]["interrupted"], 1)
+        self.assertEqual((w["problems"], w["current_phase"]), ({"stalled": 0, "failed": 0}, None))
+
+    def test_resumed_run_gets_name_phases_and_resumed_from(self):
+        orig = "wf_0000aaaa-001"
+        self.wf(orig, self.started("k1", "build", "Build"), age=7200, script=SCRIPT, name="kit",
+                 agents={"k1": ([tool_turn()], 7200)}, meta_age=3 * 3600)
+        script = self.dir / "workflows" / "scripts" / f"kit-{orig}.js"
+        new = "wf_0000bbbb-002"
+        self.wf(new, self.started("k2", "verify", "Verify"), agents={"k2": ([tool_turn()], 0)}, meta_age=58)
+        self.transcript(self.s, user_text("resume it"), launch(script, 60, resume=orig))
+        by_id = {w["id"]: w for w in self.detail()["workflows"]}
+        w = by_id[new]
+        self.assertEqual((w["name"], w["resumed_from"], w["description"]), ("kit", orig, "Build then verify"))
+        self.assertEqual([p["title"] for p in w["phases"]], ["Build", "Verify"])
+        self.assertEqual((w["phase_total"], w["current_phase"], w["status"]), (2, 1, "running"))
+        self.assertEqual((by_id[orig]["superseded_by"], by_id[orig]["status"]), (new, "interrupted"))
+
+    def test_relaunch_from_copied_script_links_by_tool_result(self):
+        orig = "wf_0000aaaa-001"
+        self.wf(orig, self.started("k1", "build", "Build"), age=7200, script=SCRIPT, name="my-flow",
+                 agents={"k1": ([tool_turn()], 7200)}, meta_age=3 * 3600)
+        copy = self.tmp / "continue.js"
+        copy.write_text(SCRIPT)
+        new = "wf_0000bbbb-002"
+        rd = self.wf(new, self.started("k2", "verify", "Verify"), agents={"k2": ([tool_turn()], 0)}, meta_age=58)
+        # A later unlinked call, still before the run started, must not win over the linked one.
+        self.transcript(self.s, launch(copy, 60, tool_id="toolu_9"), launched(rd, "toolu_9"),
+                        launch(self.tmp / "other-wf_0000cccc-003.js", 59, tool_id="toolu_8"))
+        by_id = {w["id"]: w for w in self.detail()["workflows"]}
+        self.assertEqual((by_id[new]["name"], by_id[new]["resumed_from"], by_id[new]["phase_total"]),
+                         ("my-flow", orig, 2))
+        self.assertEqual(by_id[orig]["superseded_by"], new)
+
+    def test_phase_total_null_without_script(self):
+        self.wf("wf_0000aaaa-001", self.started("k1", "x", "Work"), agents={"k1": ([tool_turn()], 0)})
+        [w] = self.detail()["workflows"]
+        self.assertEqual((w["name"], w["phase_total"], w["resumed_from"]), ("", None, ""))
+        self.assertEqual(([p["title"] for p in w["phases"]], w["current_phase"]), (["Work"], 0))
+
+    def test_retried_agent_is_not_stalled(self):
+        self.wf("wf_0000aaaa-001", self.started("k1", "engine-api", "Service"),
+                 self.started("k2", "engine-api", "Service"), {"type": "result", "key": "k2"},
+                 self.started("k3", "audit", "Audit"),
+                 agents={"k1": ([tool_turn()], 1800), "k3": ([tool_turn()], 0)})
+        [w] = self.detail()["workflows"]
+        service, audit = w["phases"]
+        self.assertEqual({k: v for k, v in service["counts"].items() if v}, {"done": 1, "retried": 1})
+        [old] = service["agents"]                   # done agents are counted, not listed
+        self.assertEqual((old["id"], old["status"], old["superseded"]), ("k1", "stalled", True))
+        self.assertGreater(old["updated_at"], 0)
+        self.assertEqual((w["problems"], w["agent_count"], w["current_phase"]),
+                         ({"stalled": 0, "failed": 0}, 2, 1))
+
+    def test_current_phase_is_first_at_work_and_passed_failures_are_no_problem(self):
+        self.wf("wf_0000aaaa-001",
+                 self.started("a1", "a-fail", "A"), {"type": "failed", "key": "a1"},
+                 self.started("b1", "b-run", "B"), self.started("b2", "b-fail", "B"), {"type": "failed", "key": "b2"},
+                 self.started("c1", "c-run", "C"),
+                 script=PHASES3, name="three",
+                 agents={"b1": ([tool_turn(description="b")], 0), "c1": ([tool_turn(description="c")], 0)})
+        [w] = self.detail()["workflows"]
+        self.assertEqual((w["phase_total"], w["current_phase"]), (3, 1))
+        self.assertEqual(w["problems"], {"stalled": 0, "failed": 1})       # B's, not A's
+        self.assertEqual(w["phases"][0]["counts"]["failed"], 1)
+        self.assertEqual(w["phases"][2]["agents"][0]["doing"], "Bash: c")
+
+    def test_finished_run_lists_only_failed_agents(self):
+        rd = self.wf("wf_0000aaaa-001", self.started("a1", "ok", "A"), {"type": "result", "key": "a1"},
+                      self.started("a2", "bad", "A"), {"type": "failed", "key": "a2"}, script=PHASES3, name="three")
+        (self.dir / "workflows" / "wf_0000aaaa-001.json").write_text(json.dumps(
+            {"workflowName": "three", "status": "completed", "startTime": int((time.time() - 600) * 1000),
+             "durationMs": 60_000, "phases": [{"title": "A"}, {"title": "B"}, {"title": "C"}]}))
+        self.assertTrue(rd.is_dir())
+        [w] = self.detail()["workflows"]
+        self.assertEqual([a["label"] for a in w["phases"][0]["agents"]], ["bad"])
+        self.assertEqual((w["phases"][0]["counts"]["done"], w["current_phase"], w["problems"]),
+                         (1, None, {"stalled": 0, "failed": 0}))
+
+    def test_parked_husk_is_dropped(self):
+        self.session("job", "busy", kind="bg", jobId="2cf53fe7")
+        husk = self.session("husk", "busy", parkedJobId="2cf53fe7")
+        kept = self.session("parked-elsewhere", "busy", parkedJobId="gone0000")
+        ids = {r["session_id"] for r in self.rows()}
+        self.assertNotIn(husk["sessionId"], ids)
+        self.assertIn(kept["sessionId"], ids)
+        self.assertEqual(len(ids), 3)
+
+    def test_one_row_per_session_most_urgent_kept(self):
+        a = self.session("twice", "busy")
+        self.session("twice", "waiting", sessionId=a["sessionId"], waitingFor="permission prompt")
+        mine = [r for r in self.rows() if r["session_id"] == a["sessionId"]]
+        self.assertEqual([r["state"] for r in mine], ["blocked"])
+
+    def test_asking_reply_quiet_and_times(self):
+        blocked = self.session("asks", "waiting", age=30, waitingFor="permission prompt")
+        # A permission prompt shows the command itself, not the tool call's description.
+        self.transcript(blocked, user_text("clone it"),
+                        tool_turn(command="git clone https://x/y.git", description="Clone the repo"))
+        done = self.session("answers", "idle", age=10)
+        self.transcript(done, user_text("why?"), text_turn("Because  the\ncache was stale.\n\nDetails follow."))
+        write_jsonl(self.claude / "projects" / "-proj" / f"{self.s['sessionId']}.jsonl", user_text("x"), age=1200)
+        b, d, w = self.detail(blocked["sessionId"]), self.detail(done["sessionId"]), self.detail()
+        self.assertEqual((b["asking"], b["reply"]), ("Bash: git clone https://x/y.git", ""))
+        self.assertEqual((d["asking"], d["reply"]), ("", "Because the cache was stale."))
+        self.assertEqual((w["asking"], w["reply"], w["quiet"]), ("", "", True))
+        self.assertAlmostEqual(w["last_activity"], time.time() - 1200, delta=5)
+        self.assertEqual(b["state_changed_at"], blocked["statusUpdatedAt"] // 1000)
+        self.assertEqual(w["started_at"], self.s["startedAt"] // 1000)
+        self.assertFalse(d["quiet"])
+        # A live run keeps a silent session from reading as quiet.
+        self.wf("wf_0000aaaa-001", self.started("k1", "x", "Work"), agents={"k1": ([tool_turn()], 0)})
+        self.assertFalse(self.detail()["quiet"])
+
+    def test_asking_is_only_a_call_still_pending(self):
+        # Blocked by a dialog after the last call already ran: nothing to approve.
+        ran = self.session("dialog", "waiting", waitingFor="dialog open")
+        call = tool_turn(command="git status --short")
+        call["message"]["content"][1]["id"] = "toolu_1"
+        result = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "M x"}]}}
+        self.transcript(ran, user_text("status please"), call, result, text_turn("Clean enough."))
+        self.assertEqual(self.detail(ran["sessionId"])["asking"], "")
+        # Of two parallel calls, the one without a result is the one asking.
+        both = self.session("parallel", "waiting", waitingFor="permission prompt")
+        second = tool_turn(command="rm -rf build")
+        second["message"]["content"][1]["id"] = "toolu_2"
+        self.transcript(both, user_text("go"), second, call, result)
+        self.assertEqual(self.detail(both["sessionId"])["asking"], "Bash: rm -rf build")
 
 
 class TestServer(Sandbox):
