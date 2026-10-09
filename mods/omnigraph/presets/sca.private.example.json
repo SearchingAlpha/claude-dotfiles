@@ -1,0 +1,9 @@
+{
+  "options": {
+    "owner": "<your alias: the owner line of every patch the Queue exports>"
+  },
+  "checkStore": "<absolute path of a SupplyChainAgents checkout>/ontology/build",
+  "neverCommit": [
+    "<a confidential string no committed file of the mod may hold, such as your work email>"
+  ]
+}

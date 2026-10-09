@@ -1,0 +1,4 @@
+{
+  "description": "omnigraph: the /omni pane (graph, browser, op feed, review queue) and the band above the prompt. Observe-only; inert where nothing draws (claude -p).",
+  "modules": ["./register.ts"]
+}

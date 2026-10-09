@@ -1,0 +1,4 @@
+#!/bin/sh
+# The demo CLI under the name the mod's default cmdRegex watches:
+# put this folder on PATH and `omnigraph mutate ...` runs omni.py.
+exec python3 "$(dirname "$0")/omni.py" "$@"
