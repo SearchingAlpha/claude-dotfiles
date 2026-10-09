@@ -1,0 +1,7 @@
+{
+  "deny": [
+    "<an account id>",
+    "<your work email>",
+    "<a table, host or colleague name a run log mentions>"
+  ]
+}
