@@ -28,7 +28,10 @@ flowchart LR
 
 ```bash
 ln -sfn ~/claude-dotfiles/harnesses/herd/herd.py ~/.local/bin/herd
+mkdir -p ~/.config/tmux && ln -sfn ~/claude-dotfiles/harnesses/herd/tmux.conf ~/.config/tmux/tmux.conf
 ```
+
+The second line is optional: [`tmux.conf`](tmux.conf) turns on mouse-wheel scrollback, keeps 50,000 lines per pane and passes Claude Code's 24-bit colour through. If you already keep a `~/.tmux.conf`, copy its three settings there instead. Run `tmux source-file ~/.config/tmux/tmux.conf` to apply it to a tmux server that is already running.
 
 ## Use
 
