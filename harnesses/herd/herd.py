@@ -496,10 +496,19 @@ def _live_status(updated: float, session_live: bool, now: float, session_start: 
 
 
 COUNTED = ("running", "stalled", "done", "failed", "interrupted")
+GRAPH_PHASE_CAP = 6     # workflow agents the graph draws per phase; the rest are a "more" count
+
+
+def _graph_rank(a: dict, live: bool) -> int:
+    """Which of a phase's agents the graph draws first: trouble, then work, then history."""
+    if a["superseded"]:
+        return 3
+    return {"stalled": 0, "failed": 1 if live else 4, "running": 2, "done": 5}.get(a["status"], 4)
 
 
 def _workflow(run_id: str, parts: dict, session_live: bool, now: float,
-              session_start: float = 0.0, launches: Optional[tuple] = None) -> Optional[dict]:
+              session_start: float = 0.0, launches: Optional[tuple] = None,
+              graph: bool = False) -> Optional[dict]:
     final = read_json(parts["final"]) if parts.get("final") else None
     final = final if isinstance(final, dict) else {}
     meta = _script_meta(parts["script"]) if parts.get("script") else {}
@@ -579,13 +588,25 @@ def _workflow(run_id: str, parts: dict, session_live: bool, now: float,
         counted = [a for a in members if not a["superseded"]]
         counts = {s: sum(a["status"] == s for a in counted) for s in COUNTED}
         counts["retried"] = len(members) - len(counted)
-        # Payload bound: finished agents are counted, not listed (a phase can hold hundreds).
-        shown = [a for a in members if a["status"] != "done"] if live else \
-            [a for a in counted if a["status"] == "failed"]
+        more: dict = {}
+        if graph:
+            # The graph draws a few of every phase, finished ones too, in the order they
+            # started; which few: trouble first, then work, then the newest history.
+            order = {id(a): i for i, a in enumerate(members)}
+            picked = sorted(members, key=lambda a: (_graph_rank(a, live), -order[id(a)]))
+            shown = sorted(picked[:GRAPH_PHASE_CAP], key=lambda a: order[id(a)])
+            for a in picked[GRAPH_PHASE_CAP:]:
+                k = "retried" if a["superseded"] else a["status"]
+                more[k] = more.get(k, 0) + 1
+        else:
+            # Payload bound: finished agents are counted, not listed (a phase can hold hundreds).
+            shown = [a for a in members if a["status"] != "done"] if live else \
+                [a for a in counted if a["status"] == "failed"]
         for a in shown:
             if not a["updated_at"] and run_dir:
                 a["updated_at"] = int(_mtime(run_dir / f"agent-{a['id']}.jsonl"))
-        phases.append({"title": t or "—", "agents": shown, "counts": counts, "_members": counted})
+        phases.append({"title": t or "—", "agents": shown, "counts": counts, "_members": counted,
+                       **({"more": more} if graph else {})})
     # The current phase is the first (declared order) still at work, not the newest one started.
     current = next((i for i, p in enumerate(phases)
                     if any(a["status"] in LIVE for a in p["_members"])), None)
@@ -613,10 +634,12 @@ def _workflow(run_id: str, parts: dict, session_live: bool, now: float,
             "phases": phases}
 
 
-def workflows(session_id: str, session_live: bool, now: float, session_start: float = 0.0) -> list[dict]:
+def workflows(session_id: str, session_live: bool, now: float, session_start: float = 0.0,
+              graph: bool = False) -> list[dict]:
     """The session's workflow runs: every unfinished one, plus those that ended in the
     last 24 h; oldest first. A run resumed from an earlier one names it in
-    `resumed_from`, and the earlier one points back with `superseded_by`."""
+    `resumed_from`, and the earlier one points back with `superseded_by`. With `graph`,
+    each phase lists a few of its agents whatever their state (see _workflow)."""
     runs: dict = {}
     for d in session_dirs(session_id):
         for f in (d / "workflows").glob("wf_*.json"):
@@ -633,7 +656,7 @@ def workflows(session_id: str, session_live: bool, now: float, session_start: fl
                                                     for p in runs.values()) else None
     out = []
     for rid, parts in runs.items():
-        w = _workflow(rid, parts, session_live, now, session_start, launches)
+        w = _workflow(rid, parts, session_live, now, session_start, launches, graph)
         if w:
             out.append(w)
     out.sort(key=lambda w: w["started_at"])
@@ -651,38 +674,67 @@ def workflows(session_id: str, session_live: bool, now: float, session_start: fl
     return out
 
 
-def subagents(session_id: str, session_live: bool, now: float, session_start: float = 0.0) -> list[dict]:
-    """Subagents the session spawned itself (workflow agents live under their run)."""
-    res = []
+def subagents(session_id: str, session_live: bool, now: float, session_start: float = 0.0,
+              ancestors: bool = False) -> list[dict]:
+    """Subagents the session spawned, nested ones included (`parent` names the agent that
+    spawned one; workflow agents live under their run), oldest first. Two project dirs can
+    hold a copy of one agent: the larger transcript wins. With `ancestors`, a finished agent
+    older than the window stays while it leads to an agent that is shown."""
+    found: dict = {}
     for d in session_dirs(session_id):
         for meta_path in (d / "subagents").glob("agent-*.meta.json"):
             meta = read_json(meta_path) or {}
             if not isinstance(meta, dict) or meta.get("agentType") == "workflow-subagent":
                 continue
-            tx = meta_path.with_name(meta_path.name.replace(".meta.json", ".jsonl"))
-            started, updated = _mtime(meta_path), _mtime(tx) or _mtime(meta_path)
+            aid = meta_path.name[len("agent-"):-len(".meta.json")]
+            tx = meta_path.with_name(f"agent-{aid}.jsonl")
+            try:
+                size = tx.stat().st_size
+            except OSError:
+                size = 0
+            if aid in found and found[aid]["size"] >= size:
+                continue
+            updated = _mtime(tx) or _mtime(meta_path)
+            # The meta file is rewritten after the spawn; the transcript's first record is not.
+            started = _first_stamp(tx) or _mtime(meta_path)
             turns = tail_turns(tx)
             status = "stopped" if meta.get("stoppedByUser") else \
                 ended(turns, now - updated) or _live_status(updated, session_live, now, session_start)
-            if status not in LIVE and now - updated > WINDOW:
-                continue
-            res.append({"id": meta_path.name[len("agent-"):-len(".meta.json")],
-                        "type": meta.get("agentType") or "agent",
-                        "description": meta.get("description") or "",
-                        "background": meta.get("requestShape") == "background",
-                        "status": status, "doing": doing(turns) if status in LIVE else "",
-                        "started_at": int(started), "updated_at": int(updated)})
-    res.sort(key=lambda a: a["started_at"])
+            found[aid] = {"id": aid, "type": meta.get("agentType") or "agent",
+                          "description": meta.get("description") or "",
+                          "background": meta.get("requestShape") == "background",
+                          "status": status, "doing": doing(turns) if status in LIVE else "",
+                          "started_at": int(started), "updated_at": int(updated),
+                          "ended_at": 0 if status in LIVE else int(updated),
+                          "parent": str(meta.get("parentAgentId") or ""),
+                          "fork": bool(meta.get("isFork")) or meta.get("agentType") == "fork",
+                          "tool_use_id": str(meta.get("toolUseId") or ""),
+                          "model": str(meta.get("model") or ""),
+                          "worktree_branch": str(meta.get("worktreeBranch") or ""), "size": size}
+    keep = {aid for aid, a in found.items() if a["status"] in LIVE or now - a["updated_at"] <= WINDOW}
+    if ancestors:
+        for aid in list(keep):
+            p, path = found[aid]["parent"], set()
+            while p in found and p not in path:
+                path.add(p)
+                keep.add(p)
+                p = found[p]["parent"]
+    res = [a for aid, a in found.items() if aid in keep]
+    for a in res:
+        if a["parent"] not in keep:             # its spawner is gone or out of the window
+            a["parent"] = ""
+    res.sort(key=lambda a: (a["started_at"], a["id"]))
     return res
 
 
 # --- the list ------------------------------------------------------------------------
 
-def sessions(detail: bool = False) -> list[dict]:
+def sessions(detail: bool = False, extras: bool = True) -> list[dict]:
     """Every live session, most urgent first; within a state, waiting longest first.
     With `detail`, each also carries its workflows, its own subagents, what it is asking
-    for (blocked) or answered (done), and when it last wrote anything."""
-    panes, branches, rows = tmux_panes(), {}, []
+    for (blocked) or answered (done), and when it last wrote anything. Without `extras`,
+    no subprocess runs: branch and tmux stay empty."""
+    panes, branches, rows = tmux_panes() if extras else {}, {}, []
     now = time.time()
     entries = []
     for p in (claude_dir() / "sessions").glob("*.json"):
@@ -713,8 +765,8 @@ def sessions(detail: bool = False) -> list[dict]:
             "kind": e.get("kind") or "interactive", "state": state,
             "waiting_for": e.get("waitingFor") or "", "since": max(0, int(now - changed)),
             "state_changed_at": int(changed), "started_at": int(started),
-            "cwd": cwd, "branch": git_branch(cwd, branches) if cwd else "",
-            "tmux": tmux_target(int(e["pid"]), panes) or "",
+            "cwd": cwd, "branch": git_branch(cwd, branches) if cwd and extras else "",
+            "tmux": (tmux_target(int(e["pid"]), panes) or "") if extras else "",
             "prompt": (recs.get("last-prompt") or {}).get("lastPrompt") or "",
         }
         rows.append(row)

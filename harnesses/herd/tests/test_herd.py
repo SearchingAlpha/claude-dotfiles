@@ -505,6 +505,84 @@ class TestTruth(Sandbox):
         self.assertEqual(self.detail(both["sessionId"])["asking"], "Bash: rm -rf build")
 
 
+def stamped(rec: dict, age=0) -> dict:
+    return {**rec, "timestamp": iso(age), "uuid": str(uuid.uuid4())}
+
+
+def agent(sub: Path, aid: str, meta: dict, *turns, age=0, start_age=None, meta_age=0) -> Path:
+    """A subagent: meta file plus a transcript whose first record is stamped start_age ago."""
+    first = stamped(user_text("go"), start_age if start_age is not None else age + 60)
+    write_jsonl(sub / f"agent-{aid}.jsonl", first, *turns, age=age)
+    touch(sub / f"agent-{aid}.meta.json", meta_age, json.dumps({"agentType": "general-purpose", **meta}))
+    return sub / f"agent-{aid}.jsonl"
+
+
+class TestGraphData(Sandbox):
+    """What the graph needs from subagents() and workflows()."""
+
+    def setUp(self):
+        super().setUp()
+        self.s = self.session("lead", "busy", startedAt=int((time.time() - 3 * 3600) * 1000))
+        self.sid = self.s["sessionId"]
+        self.sub = self.claude / "projects" / "-proj" / self.sid / "subagents"
+
+    def agents(self, **kw) -> dict:
+        return {a["id"]: a for a in herd.subagents(self.sid, True, time.time(), time.time() - 3 * 3600, **kw)}
+
+    def test_nested_agents_forks_and_start_from_transcript(self):
+        agent(self.sub, "lead1", {"description": "plan it", "toolUseId": "toolu_1", "model": "sonnet"},
+              tool_turn(description="read"), start_age=600)          # meta rewritten just now
+        agent(self.sub, "kid1", {"description": "dig", "parentAgentId": "lead1", "spawnDepth": 2},
+              text_turn(), age=120, start_age=300, meta_age=120)
+        fork = self.sub / "agent-fork1.jsonl"
+        write_jsonl(fork, {"type": "fork-context-ref", "agentId": "fork1"}, stamped(user_text("x"), 200),
+                    tool_turn(description="fork work"))
+        touch(self.sub / "agent-fork1.meta.json", 0, json.dumps({"agentType": "fork", "isFork": True}))
+        got = self.agents()
+        self.assertEqual([a["id"] for a in herd.subagents(self.sid, True, time.time())], ["lead1", "kid1", "fork1"])
+        self.assertAlmostEqual(got["lead1"]["started_at"], time.time() - 600, delta=5)
+        self.assertEqual((got["lead1"]["parent"], got["lead1"]["tool_use_id"], got["lead1"]["model"]),
+                         ("", "toolu_1", "sonnet"))
+        self.assertEqual((got["kid1"]["parent"], got["kid1"]["status"]), ("lead1", "done"))
+        self.assertAlmostEqual(got["kid1"]["ended_at"], time.time() - 120, delta=5)
+        self.assertEqual((got["fork1"]["fork"], got["fork1"]["status"], got["fork1"]["ended_at"]), (True, "running", 0))
+
+    def test_finished_ancestor_kept_only_for_the_graph(self):
+        agent(self.sub, "old", {"description": "long done"}, text_turn(), age=2 * 86400)
+        agent(self.sub, "kid", {"description": "still at it", "parentAgentId": "old"}, tool_turn())
+        self.assertEqual({k: a["parent"] for k, a in self.agents().items()}, {"kid": ""})
+        self.assertEqual({k: a["parent"] for k, a in self.agents(ancestors=True).items()},
+                         {"old": "", "kid": "old"})
+
+    def test_copy_in_another_project_dir_counts_once(self):
+        agent(self.sub, "dup", {"description": "short copy"}, text_turn())
+        other = self.claude / "projects" / "-other" / self.sid / "subagents"
+        agent(other, "dup", {"description": "full copy"}, tool_turn(), tool_turn(), text_turn())
+        [a] = self.agents().values()
+        self.assertEqual(a["description"], "full copy")
+
+    def test_workflow_graph_lists_a_few_of_every_phase(self):
+        rd = self.claude / "projects" / "-proj" / self.sid / "subagents" / "workflows" / "wf_0000aaaa-001"
+        events = []
+        for i in range(20):
+            events += [{"type": "started", "key": f"d{i}", "agentId": f"d{i}", "label": f"done-{i}", "phase": "Build"},
+                       {"type": "result", "key": f"d{i}"}]
+        events += [{"type": "started", "key": "f", "agentId": "f", "label": "broke", "phase": "Build"},
+                   {"type": "failed", "key": "f"},
+                   {"type": "started", "key": "r", "agentId": "r", "label": "busy", "phase": "Build"}]
+        write_jsonl(rd / "journal.jsonl", *events)
+        write_jsonl(rd / "agent-r.jsonl", tool_turn(description="build"))
+        now, start = time.time(), time.time() - 3 * 3600
+        [w] = herd.workflows(self.sid, True, now, start, graph=True)
+        [build] = w["phases"]
+        self.assertEqual([a["label"] for a in build["agents"]],
+                         ["done-16", "done-17", "done-18", "done-19", "broke", "busy"])
+        self.assertEqual(build["more"], {"done": 16})
+        [plain] = herd.workflows(self.sid, True, now, start)[0]["phases"]
+        self.assertEqual([a["label"] for a in plain["agents"]], ["broke", "busy"])
+        self.assertNotIn("more", plain)
+
+
 class TestServer(Sandbox):
     def setUp(self):
         super().setUp()
