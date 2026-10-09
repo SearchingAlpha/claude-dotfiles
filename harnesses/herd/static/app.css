@@ -56,6 +56,12 @@ code { font-family: var(--mono); font-size: var(--t-meta); }
 .host { margin-left: auto; color: var(--faint); font-size: var(--t-meta); line-height: var(--lh-meta);
   white-space: nowrap; }
 .host.warn { color: var(--warn); }
+/* The view switch: plain text, underlined while the graph is showing; the host follows it. */
+.view { margin-left: auto; color: var(--muted); font-size: var(--t-meta); line-height: var(--lh-meta);
+  white-space: nowrap; text-underline-offset: 4px; }
+.view:hover { color: var(--text); }
+.view[aria-pressed="true"] { color: var(--text); text-decoration: underline; text-decoration-thickness: 2px; }
+.view ~ .host { margin-left: 0; }
 
 /* --- groups ---------------------------------------------------------------------------- */
 main { max-width: 1040px; margin: 0 auto; padding: var(--s5) var(--s5) 0;
@@ -190,6 +196,68 @@ main { max-width: 1040px; margin: 0 auto; padding: var(--s5) var(--s5) 0;
 .fin > .fx, .fin > .c-s { color: var(--muted); font-size: var(--t-meta); white-space: nowrap; }
 .fin > .c-s { justify-self: end; }
 
+/* --- graph: one outline per session, spawn connectors as hairlines, messages as gutter arcs --- */
+.gwrap { position: relative; padding-left: 40px; }
+.arcs { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; color: var(--mark); }
+.arcs path { fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+.arcs .hit { stroke: transparent; stroke-width: 8; pointer-events: stroke; }
+.gtree, .gk { list-style: none; margin: 0; padding: 0; }
+.gtree { border-top: 1px solid var(--line-strong); }
+/* A session: its name and state in the first column, what it started fanning out to the right. */
+.gs { display: grid; grid-template-columns: 260px minmax(0, 1fr); padding: 10px 0; border-bottom: 1px solid var(--line); }
+.gs > .gn { grid-column: 1; display: block; padding-right: 0; }
+.gs > .gk { grid-column: 2; }
+.gn { display: flex; align-items: baseline; gap: 0 var(--s2); min-width: 0; min-height: var(--lh-title);
+  line-height: var(--lh-title); white-space: nowrap; padding-right: var(--s2); cursor: pointer; }
+.gn:hover { background: var(--sunk); }
+.gn > .mk { align-self: center; }
+li[data-id]:focus-visible { outline: none; }
+li[data-id]:focus-visible > .gn { outline: 2px solid var(--accent); outline-offset: 0; border-radius: var(--radius); }
+.sl1 { display: flex; align-items: baseline; gap: 0 var(--s2); min-width: 0; }
+.sl1 .m { align-self: center; display: flex; }
+.sl1 .m .mk { width: 14px; height: 14px; }
+.gname { flex: 0 1 auto; font-size: var(--t-title); font-weight: 600; min-width: 4ch; overflow: hidden;
+  text-overflow: ellipsis; }
+.gs.quiet .gname { font-weight: 400; color: var(--muted); }
+.sl1 .bgtag { flex: none; }
+.sl1 .lead { flex: 1 1 12px; min-width: 12px; align-self: center; border-top: 1px solid var(--line-strong); }
+.sl2 { padding-left: 22px; font-size: var(--t-meta); line-height: var(--lh-meta); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl2 .twin { font-size: var(--t-meta); }
+/* Connectors: a spine per child list, a stub per child; first-level children meet the session's lead. */
+.gk > li { position: relative; padding-left: 20px; }
+.gk > li::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--line-strong); }
+.gk > li:last-child::before { bottom: auto; height: 10px; }
+.gk > li::after { content: ""; position: absolute; left: 0; top: 10px; width: 14px; border-top: 1px solid var(--line-strong); }
+.gs > .gk > li:first-child::before { top: 10px; }
+.gs > .gk > li:first-child:last-child::before { display: none; }
+.gk .gk { margin-left: 6px; }              /* a nested spine runs down from its parent's mark */
+.gn .ty, .gn .lb, .gn .dg { font-family: var(--mono); font-size: var(--t-meta); }
+.gn .ty { flex: none; color: var(--muted); }
+.gn .ds, .gn .ro, .gn .dg { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gn .lb { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.gn .dg, .gn .ro { color: var(--muted); }
+.gn .ro { font-size: var(--t-meta); }
+.gn .wn { flex: 0 1 auto; max-width: 50%; overflow: hidden; text-overflow: ellipsis; }
+.gn .wn .res { color: var(--faint); font-weight: 400; }
+.gn .ph.cur { font-weight: 600; }
+.gn .mt { flex: none; color: var(--faint); font-size: var(--t-meta); }
+.gn .mt.warn { color: var(--warn); }
+.gn.gfin .ds, .gn.gfin .lb, .gn.gfin .wn { color: var(--muted); }
+.gn.gfin .ty { color: var(--faint); }
+.gn.sup .lb { color: var(--faint); }
+.gn .sp { width: 12px; flex: none; }
+.gn .more { color: var(--faint); font-size: var(--t-meta); }
+.gn .chev { align-self: center; color: var(--faint); visibility: hidden; transition: transform 160ms ease-out; }
+.gn:hover .chev, li[data-id]:focus-visible > .gn .chev, li[aria-expanded="true"] > .gn .chev { visibility: visible; }
+li[aria-expanded="true"] > .gn .chev { transform: rotate(90deg); }
+.gempty { color: var(--faint); }
+/* What a focused node can't fit on its row; only while one has focus. */
+.gdetail { position: sticky; bottom: 0; z-index: 1; background: var(--bg); border-top: 1px solid var(--line);
+  padding: var(--s2) 0 var(--s3); color: var(--muted); font-size: var(--t-meta); line-height: var(--lh-meta); }
+.gdetail .dl { overflow-wrap: anywhere; }
+.gdetail .dl.first { color: var(--text); }
+
 /* --- footer --------------------------------------------------------------------------- */
 .foot { max-width: 1040px; margin: var(--s6) auto 0; padding: 0 var(--s5) var(--s6); }
 .foot p { margin: 0 0 var(--s1); max-width: 80ch; color: var(--faint); font-size: var(--t-meta); line-height: var(--lh-meta); }
@@ -200,7 +268,7 @@ main { max-width: 1040px; margin: 0 auto; padding: var(--s5) var(--s5) 0;
 
 @media (prefers-reduced-motion: reduce) {
   .row.arrived { animation: none; }
-  .time .chev, .fold .mk { transition: none; }
+  .time .chev, .fold .mk, .gn .chev { transition: none; }
 }
 
 /* --- phone ---------------------------------------------------------------------------- */
@@ -241,4 +309,21 @@ main { max-width: 1040px; margin: 0 auto; padding: var(--s5) var(--s5) 0;
   .pgrid > .c-s { grid-column: 3; }
   .fin { grid-template-columns: 14px minmax(0, 1fr) auto; }
   .fin > .fx { display: none; }
+  /* Graph: the session row on top, its tree below with the spine under the session's mark. */
+  .gwrap { padding-left: 24px; }
+  .gs { grid-template-columns: minmax(0, 1fr); }
+  .gs > .gk { grid-column: 1; margin-left: 7px; margin-top: 2px; }
+  .sl1 .lead { display: none; }
+  .gs > .gk > li:first-child::before { top: 0; }
+  .gs > .gk > li:first-child:last-child::before { display: block; }
+  .gk > li { padding-left: 16px; }
+  .gk > li::after { width: 10px; }
+  .gn .dg { display: none; }
+  .gn .lb { max-width: none; }
+  /* A run's readout gets its own line under the name: a problem word must never be cut off. */
+  .gn.grun { flex-wrap: wrap; }
+  .gn.grun .chev { display: none; }
+  .gn.grun .wn { max-width: none; }
+  .gn.grun .ro { flex-basis: 100%; padding-left: 20px; white-space: normal; line-height: var(--lh-meta);
+    padding-bottom: 2px; }
 }

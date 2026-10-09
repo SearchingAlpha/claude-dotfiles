@@ -178,6 +178,13 @@ function phaseWords(m, i, short) {
   return out.flatMap((p, j) => (j ? [", ", p] : [p]));
 }
 
+// Which group a session belongs to; the graph view marks its sessions the same way.
+function groupOf(s) {
+  if (s.state === "blocked") return "need";
+  if (s.state === "done") return seen[seenKey(s)] && !sticky.has(s.session_id) ? "idle" : "turn";
+  return "work";
+}
+
 function model(s, twins) {
   const wfs = objs(s.workflows).map(wmodel);
   const live = wfs.filter((m) => m.live);
@@ -186,10 +193,7 @@ function model(s, twins) {
   const agents = objs(s.agents);
   const liveAgents = agents.filter((a) => LIVE.has(a.status));
   const problem = live.some((m) => m.stalled + m.failed > 0) || liveAgents.some((a) => a.status === "stalled");
-  let group = "work";
-  if (s.state === "blocked") group = "need";
-  else if (s.state === "done") group = seen[seenKey(s)] && !sticky.has(s.session_id) ? "idle" : "turn";
-  return { s, live, finished, agents, liveAgents, problem, group, twin: twins[s.name] > 1,
+  return { s, live, finished, agents, liveAgents, problem, group: groupOf(s), twin: twins[s.name] > 1,
            known: ["blocked", "done", "working"].includes(s.state) };
 }
 
@@ -648,9 +652,29 @@ function setup() {
     sections[g] = { section, ul, n };
   }
   document.addEventListener("keydown", onKey);
-  window.addEventListener("hashchange", openFromHash);
+  window.addEventListener("hashchange", route);
+  $("view").addEventListener("click", () => setView(!graphShown()));
   setInterval(header, 1000);
   poll();
+  route();
+}
+
+// Two views of the same sessions: the list (default) and #graph. The list keeps polling under the
+// graph, so the header, title, favicon and notifications stay right and switching back is instant.
+const graphShown = () => location.hash === "#graph";
+function route() {
+  const g = graphShown() && !net.signedOut;
+  $("app").hidden = g;
+  $("graph").hidden = !g;
+  const v = $("view");
+  v.setAttribute("aria-pressed", String(g));
+  v.title = g ? "Back to the list (g)" : "Show as a graph (g)";
+  if (g) graphView.enter();
+  else { graphView.leave(); openFromHash(); }
+}
+function setView(graph) {
+  if (graph) { if (graphShown()) route(); else location.hash = "graph"; }
+  else { history.pushState(null, "", location.pathname + location.search); route(); }
 }
 
 const held = (li) => li.matches(":hover") || li.contains(document.activeElement);
@@ -848,6 +872,8 @@ function onKey(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const t = e.target;
   if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  if (e.key === "g" && !net.signedOut) { setView(!graphShown()); e.preventDefault(); return; }
+  if (graphShown()) { graphView.key(e); return; }
   const heads = [...document.querySelectorAll("#app .head")];
   const li = document.activeElement && document.activeElement.closest ? document.activeElement.closest("li.row") : null;
   const at = li ? heads.indexOf(li.querySelector(".head")) : -1;
@@ -922,6 +948,10 @@ function bodyNote(text) {
 }
 
 function signedOut() {
+  net.signedOut = true;
+  graphView.leave();
+  $("graph").hidden = true;
+  $("app").hidden = false;
   setVerdict("Signed out", false);
   setCounts("");
   for (const [g] of GROUPS) sections[g].section.hidden = true;
@@ -933,4 +963,5 @@ function signedOut() {
   document.title = "herd";
 }
 
-setup();
+// Deferred scripts all run before DOMContentLoaded, so graph.js is there when setup routes.
+document.addEventListener("DOMContentLoaded", setup);

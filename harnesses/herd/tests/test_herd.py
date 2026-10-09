@@ -129,6 +129,14 @@ class TestList(Sandbox):
     def test_empty(self):
         self.assertEqual(self.herd().stdout, "no live Claude Code sessions\n")
 
+    def test_go_by_session_prefix_outside_tmux(self):
+        # The dashboard copies `herd go <8-char prefix>`; outside tmux that must say why, not "no session".
+        e = self.session("plain", "idle")
+        r = self.herd("go", e["sessionId"][:8])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not running in tmux", r.stderr)
+        self.assertIn("no session", self.herd("go", e["sessionId"][:3]).stderr)
+
 
 class TestHelpers(unittest.TestCase):
     def test_tmux_target_walks_ancestors(self):
@@ -148,6 +156,44 @@ class TestHelpers(unittest.TestCase):
 
     def test_ago(self):
         self.assertEqual([herd.ago(s) for s in (5, 125, 7300, 200000)], ["5s", "2m", "2h", "2d"])
+
+    def test_grow_reads_only_new_complete_lines(self):
+        tmp = Path(tempfile.mkdtemp(prefix="herd-grow-"))
+        try:
+            path, cache = tmp / "t.jsonl", {}
+            grow = lambda: herd._grow(path, cache, (b"hit",), list, lambda ln, acc: acc.append(ln))  # noqa: E731
+            path.write_bytes(b"hit 1\nmiss\nhit 2\nhit 3 half")
+            self.assertEqual(grow(), [b"hit 1", b"hit 2"])
+            with open(path, "ab") as f:
+                f.write(b" done\nhit 4\n")
+            self.assertEqual(grow(), [b"hit 1", b"hit 2", b"hit 3 half done", b"hit 4"])
+            self.assertEqual(cache[path][1], path.stat().st_size)
+            path.write_bytes(b"hit a\n")                         # rewritten shorter: start over
+            self.assertEqual(grow(), [b"hit a"])
+            other = tmp / "new.jsonl"
+            other.write_bytes(b"hit a\nhit b\nhit c\n")
+            os.replace(other, path)                              # replaced (new inode): start over
+            self.assertEqual(grow(), [b"hit a", b"hit b", b"hit c"])
+            self.assertEqual(herd._grow(tmp / "gone", cache, (b"hit",), list, None), [])
+            saved, herd.BLOCK = herd.BLOCK, 4            # lines longer than a read block
+            try:
+                self.assertEqual(herd._grow(path, {}, (b"hit",), list, lambda ln, acc: acc.append(ln)),
+                                 [b"hit a", b"hit b", b"hit c"])
+            finally:
+                herd.BLOCK = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_first_stamp_skips_records_without_one(self):
+        tmp = Path(tempfile.mkdtemp(prefix="herd-stamp-"))
+        try:
+            path = tmp / "agent.jsonl"
+            write_jsonl(path, {"type": "fork-context-ref", "agentId": "a"},
+                        {"type": "user", "timestamp": "2026-10-08T18:42:41.000Z"})
+            self.assertEqual(herd._first_stamp(path), herd._epoch("2026-10-08T18:42:41.000Z"))
+            self.assertEqual(herd._first_stamp(tmp / "missing.jsonl"), 0.0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def tool_turn(name="Bash", **inp) -> dict:
@@ -459,6 +505,289 @@ class TestTruth(Sandbox):
         self.assertEqual(self.detail(both["sessionId"])["asking"], "Bash: rm -rf build")
 
 
+def stamped(rec: dict, age=0) -> dict:
+    return {**rec, "timestamp": iso(age), "uuid": str(uuid.uuid4())}
+
+
+def agent(sub: Path, aid: str, meta: dict, *turns, age=0, start_age=None, meta_age=0) -> Path:
+    """A subagent: meta file plus a transcript whose first record is stamped start_age ago."""
+    first = stamped(user_text("go"), start_age if start_age is not None else age + 60)
+    write_jsonl(sub / f"agent-{aid}.jsonl", first, *turns, age=age)
+    touch(sub / f"agent-{aid}.meta.json", meta_age, json.dumps({"agentType": "general-purpose", **meta}))
+    return sub / f"agent-{aid}.jsonl"
+
+
+class TestGraphData(Sandbox):
+    """What the graph needs from subagents() and workflows()."""
+
+    def setUp(self):
+        super().setUp()
+        self.s = self.session("lead", "busy", startedAt=int((time.time() - 3 * 3600) * 1000))
+        self.sid = self.s["sessionId"]
+        self.sub = self.claude / "projects" / "-proj" / self.sid / "subagents"
+
+    def agents(self, **kw) -> dict:
+        return {a["id"]: a for a in herd.subagents(self.sid, True, time.time(), time.time() - 3 * 3600, **kw)}
+
+    def test_nested_agents_forks_and_start_from_transcript(self):
+        agent(self.sub, "lead1", {"description": "plan it", "toolUseId": "toolu_1", "model": "sonnet"},
+              tool_turn(description="read"), start_age=600)          # meta rewritten just now
+        agent(self.sub, "kid1", {"description": "dig", "parentAgentId": "lead1", "spawnDepth": 2},
+              text_turn(), age=120, start_age=300, meta_age=120)
+        fork = self.sub / "agent-fork1.jsonl"
+        write_jsonl(fork, {"type": "fork-context-ref", "agentId": "fork1"}, stamped(user_text("x"), 200),
+                    tool_turn(description="fork work"))
+        touch(self.sub / "agent-fork1.meta.json", 0, json.dumps({"agentType": "fork", "isFork": True}))
+        got = self.agents()
+        self.assertEqual([a["id"] for a in herd.subagents(self.sid, True, time.time())], ["lead1", "kid1", "fork1"])
+        self.assertAlmostEqual(got["lead1"]["started_at"], time.time() - 600, delta=5)
+        self.assertEqual((got["lead1"]["parent"], got["lead1"]["tool_use_id"], got["lead1"]["model"]),
+                         ("", "toolu_1", "sonnet"))
+        self.assertEqual((got["kid1"]["parent"], got["kid1"]["status"]), ("lead1", "done"))
+        self.assertAlmostEqual(got["kid1"]["ended_at"], time.time() - 120, delta=5)
+        self.assertEqual((got["fork1"]["fork"], got["fork1"]["status"], got["fork1"]["ended_at"]), (True, "running", 0))
+
+    def test_finished_ancestor_kept_only_for_the_graph(self):
+        agent(self.sub, "old", {"description": "long done"}, text_turn(), age=2 * 86400)
+        agent(self.sub, "kid", {"description": "still at it", "parentAgentId": "old"}, tool_turn())
+        self.assertEqual({k: a["parent"] for k, a in self.agents().items()}, {"kid": ""})
+        self.assertEqual({k: a["parent"] for k, a in self.agents(ancestors=True).items()},
+                         {"old": "", "kid": "old"})
+
+    def test_copy_in_another_project_dir_counts_once(self):
+        agent(self.sub, "dup", {"description": "short copy"}, text_turn())
+        other = self.claude / "projects" / "-other" / self.sid / "subagents"
+        agent(other, "dup", {"description": "full copy"}, tool_turn(), tool_turn(), text_turn())
+        [a] = self.agents().values()
+        self.assertEqual(a["description"], "full copy")
+
+    def test_workflow_graph_lists_a_few_of_every_phase(self):
+        rd = self.claude / "projects" / "-proj" / self.sid / "subagents" / "workflows" / "wf_0000aaaa-001"
+        events = []
+        for i in range(20):
+            events += [{"type": "started", "key": f"d{i}", "agentId": f"d{i}", "label": f"done-{i}", "phase": "Build"},
+                       {"type": "result", "key": f"d{i}"}]
+        events += [{"type": "started", "key": "f", "agentId": "f", "label": "broke", "phase": "Build"},
+                   {"type": "failed", "key": "f"},
+                   {"type": "started", "key": "r", "agentId": "r", "label": "busy", "phase": "Build"}]
+        write_jsonl(rd / "journal.jsonl", *events)
+        write_jsonl(rd / "agent-r.jsonl", tool_turn(description="build"))
+        now, start = time.time(), time.time() - 3 * 3600
+        [w] = herd.workflows(self.sid, True, now, start, graph=True)
+        [build] = w["phases"]
+        self.assertEqual([a["label"] for a in build["agents"]],
+                         ["done-16", "done-17", "done-18", "done-19", "broke", "busy"])
+        self.assertEqual(build["more"], {"done": 16})
+        [plain] = herd.workflows(self.sid, True, now, start)[0]["phases"]
+        self.assertEqual([a["label"] for a in plain["agents"]], ["broke", "busy"])
+        self.assertNotIn("more", plain)
+
+
+def send_msg(tool_id, to, summary, age=0) -> dict:
+    return stamped({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": tool_id, "name": "SendMessage",
+         "input": {"to": to, "summary": summary, "message": "the body is never shown"}}]}}, age)
+
+
+def send_result(tool_id, msg_id=None, age=0) -> dict:
+    res = {"success": True, "msg_id": msg_id} if msg_id else {"message": "Message queued for delivery"}
+    return stamped({"type": "user", "toolUseResult": res, "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tool_id, "content": [{"type": "text", "text": "ok"}]}]}}, age)
+
+
+def peer_in(msg_id, age=0, attachment=False, pid=0, proc_start="") -> dict:
+    origin = {"kind": "peer", "from": "uds:/run/x.sock", "verifiedPeerPid": pid,
+              "verifiedPeerProcStart": proc_start, "msg_id": msg_id, "name": "someone", "body": "hi"}
+    if attachment:
+        return stamped({"type": "attachment", "attachment": {"type": "queued_command", "prompt": "hi",
+                                                             "origin": origin}}, age)
+    return stamped({"type": "user", "isMeta": True, "origin": origin,
+                    "message": {"content": "Another Claude session sent a message: hi"}}, age)
+
+
+def handback(aid, age=0) -> dict:
+    return stamped({"type": "user", "isMeta": True, "message": {"content": "[Subagent hand-back] done"},
+                    "origin": {"kind": "peer", "from": aid, "senderTaskId": aid, "handback": True}}, age)
+
+
+def continued_in(sid, to, age=0) -> dict:
+    return {"type": "continued-in", "timestamp": iso(age), "sessionId": sid, "continuedInSessionId": to}
+
+
+def task_note(tool_use_id, status, age=0) -> dict:
+    text = (f"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>{tool_use_id}</tool-use-id>\n"
+            f"<status>{status}</status>\n<summary>Agent finished</summary>\n</task-notification>")
+    return stamped({"type": "user", "origin": {"kind": "task-notification"}, "message": {"content": text}}, age)
+
+
+class TestGraph(Sandbox):
+    """/api/graph: spawn trees per session and the exact joins between agents."""
+
+    def lead(self, name="lead", age=3 * 3600, **extra) -> dict:
+        return self.session(name, "busy", startedAt=int((time.time() - age) * 1000), **extra)
+
+    def sub(self, s) -> Path:
+        return self.claude / "projects" / "-proj" / s["sessionId"] / "subagents"
+
+    def tx(self, sid, *records, age=0, project="-proj"):
+        write_jsonl(self.claude / "projects" / project / f"{sid}.jsonl", *records, age=age)
+
+    def graph(self) -> dict:
+        g = herd.graph()
+        self.nodes = {n["id"]: n for n in g["nodes"]}
+        self.edges = {e["id"]: e for e in g["edges"]}
+        return g
+
+    def test_spawn_tree_in_preorder(self):
+        s = self.lead()
+        sub = self.sub(s)
+        agent(sub, "lead1", {"description": "plan"}, tool_turn(), start_age=900)
+        agent(sub, "kid1", {"description": "dig", "parentAgentId": "lead1"}, text_turn(), age=60, start_age=600)
+        agent(sub, "solo", {"description": "check"}, tool_turn(), start_age=300)
+        rd = sub / "workflows" / "wf_0000aaaa-001"
+        write_jsonl(rd / "journal.jsonl",
+                    {"type": "started", "key": "b1", "agentId": "b1", "label": "build", "phase": "Build"},
+                    {"type": "result", "key": "b1"},
+                    {"type": "started", "key": "v1", "agentId": "v1", "label": "verify", "phase": "Verify"})
+        write_jsonl(rd / "agent-v1.jsonl", tool_turn(description="tests"))
+        one = sub / "workflows" / "wf_0000bbbb-002"
+        write_jsonl(one / "journal.jsonl", {"type": "started", "key": "o1", "agentId": "o1", "label": "only",
+                                            "phase": "Work"})
+        write_jsonl(one / "agent-o1.jsonl", tool_turn())
+        g = self.graph()
+        sid = s["sessionId"]
+        got = [(n["id"], n["parent"], n["depth"]) for n in g["nodes"]]
+        self.assertEqual(got[:4], [(f"s:{sid}", "", 0), ("a:lead1", f"s:{sid}", 1), ("a:kid1", "a:lead1", 2),
+                                   ("a:solo", f"s:{sid}", 1)])
+        run = [n["id"] for n in g["nodes"] if n["id"].startswith(("w:", "p:", "g:"))]
+        self.assertEqual(run, ["w:wf_0000aaaa-001", "p:wf_0000aaaa-001:0", "g:wf_0000aaaa-001:b1",
+                               "p:wf_0000aaaa-001:1", "g:wf_0000aaaa-001:v1",
+                               "w:wf_0000bbbb-002", "g:wf_0000bbbb-002:o1"])   # one phase: no phase node
+        self.assertEqual(self.nodes["g:wf_0000bbbb-002:o1"]["parent"], "w:wf_0000bbbb-002")
+        self.assertEqual(self.nodes["w:wf_0000aaaa-001"]["phases"][0]["counts"]["done"], 1)
+        seen = set()
+        for n in g["nodes"]:                    # every parent comes before its children
+            self.assertTrue(n["parent"] == "" or n["parent"] in seen, n["id"])
+            seen.add(n["id"])
+
+    def test_finished_children_fold_into_more(self):
+        s = self.lead()
+        sub = self.sub(s)
+        for i in range(9):
+            agent(sub, f"done{i}", {"description": f"d{i}"}, text_turn(), age=3000 - i * 100, start_age=3600 - i * 100)
+        agent(sub, "busy", {"description": "still"}, tool_turn(), start_age=4000)
+        self.graph()
+        kids = [n["id"] for n in self.nodes.values() if n["parent"] == f"s:{s['sessionId']}"]
+        self.assertEqual(kids, ["a:busy", "a:done4", "a:done5", "a:done6", "a:done7", "a:done8",
+                                f"more:s:{s['sessionId']}"])
+        more = self.nodes[f"more:s:{s['sessionId']}"]
+        self.assertEqual((more["count"], more["counts"], more["kinds"]), (4, {"done": 4}, {"subagent": 4}))
+
+    def test_messages_join_on_msg_id_not_names(self):
+        a, b = self.lead("twin", age=3000), self.lead("bee", age=2000)
+        c = self.lead("twin", age=1000)
+        self.tx(a["sessionId"], send_msg("t1", "bee", "first"), send_result("t1", "m1"),
+                send_msg("t2", "bee", "second"), send_result("t2", "m2"))
+        self.tx(b["sessionId"], peer_in("m1", 50), peer_in("m2", 10, attachment=True),
+                peer_in("m9", 5, pid=c["pid"], proc_start=c["procStart"]),      # sender's transcript unseen
+                peer_in("m1", 1))                                               # the same message twice
+        self.graph()
+        ab = self.edges[f"m:{a['sessionId']}:{b['sessionId']}"]
+        self.assertEqual((ab["count"], ab["summary"], ab["from"], ab["to"]),
+                         (2, "second", f"s:{a['sessionId']}", f"s:{b['sessionId']}"))
+        self.assertEqual(self.edges[f"m:{c['sessionId']}:{b['sessionId']}"]["count"], 1)
+        self.assertEqual(len([e for e in self.edges.values() if e["kind"] == "message"]), 2)
+
+    def test_handbacks_and_coordinator_messages(self):
+        s = self.lead()
+        sid = s["sessionId"]
+        sub = self.sub(s)
+        agent(sub, "X", {"description": "lead agent"}, tool_turn(), start_age=600)
+        agent(sub, "Y", {"description": "nested", "parentAgentId": "X"}, text_turn(), age=30, start_age=300)
+        with open(sub / "agent-X.jsonl", "a") as f:
+            f.write(json.dumps(handback("Y", 30)) + "\n")
+        self.tx(sid, handback("X", 200), send_msg("t1", "X", "also check B"), send_result("t1"), handback("X", 20))
+        self.graph()
+        self.assertEqual((self.edges["h:X"]["count"], self.edges["h:X"]["from"], self.edges["h:X"]["to"]),
+                         (2, "a:X", f"s:{sid}"))
+        self.assertEqual((self.edges["k:X"]["count"], self.edges["k:X"]["from"], self.edges["k:X"]["summary"]),
+                         (1, f"s:{sid}", "also check B"))
+        self.assertEqual((self.edges["h:Y"]["from"], self.edges["h:Y"]["to"]), ("a:Y", "a:X"))
+
+    def test_bg_handoff_with_copied_history_counts_once(self):
+        b = self.lead("job", age=1800, kind="bg")
+        a_sid = str(uuid.uuid4())
+        p = self.lead("peer", age=600)
+        history = [stamped(user_text("start"), 7200), handback("Z", 4000), peer_in("m1", 3000),
+                   send_msg("t1", "peer", "ping"), send_result("t1", "m2", 2990)]
+        self.tx(a_sid, *history, continued_in(a_sid, b["sessionId"], 1900), age=1900)
+        self.tx(b["sessionId"], *history, stamped(user_text("carry on"), 100))
+        self.tx(p["sessionId"], peer_in("m2", 2980))
+        for owner in (a_sid, b["sessionId"]):                   # the job's folder copies the agent too
+            agent(self.claude / "projects" / "-proj" / owner / "subagents", "Z", {"description": "z"},
+                  text_turn(), age=3900, start_age=5000)
+        g = self.graph()
+        roots = [n["id"] for n in g["nodes"] if n["kind"] == "session"]
+        self.assertEqual(roots, [f"s:{a_sid}", f"s:{b['sessionId']}", f"s:{p['sessionId']}"])
+        a = self.nodes[f"s:{a_sid}"]
+        self.assertEqual((a["state"], a["live"], a["handed_off"], a["name"]), ("ended", False, True, "Unnamed session"))
+        self.assertTrue(self.nodes[f"s:{b['sessionId']}"]["bg"])
+        self.assertIn(f"c:{a_sid}:{b['sessionId']}", self.edges)
+        self.assertEqual(self.nodes["a:Z"]["parent"], f"s:{a_sid}")
+        self.assertEqual(self.edges["h:Z"]["count"], 1)
+        self.assertEqual(self.edges[f"m:{a_sid}:{p['sessionId']}"]["count"], 1)
+        self.assertNotIn(f"m:{b['sessionId']}:{p['sessionId']}", self.edges)
+
+    def test_window_and_ended_peers(self):
+        s = self.lead()
+        recent, old = str(uuid.uuid4()), str(uuid.uuid4())
+        self.tx(recent, {"type": "ai-title", "aiTitle": "Recent peer"},
+                stamped({"type": "user", "cwd": "/srv/x", "message": {"content": "x"}}, 7300),
+                send_msg("t1", "lead", "hello"), send_result("t1", "m1", 7200), age=7200)
+        self.tx(old, send_msg("t1", "lead", "old news"), send_result("t1", "m0", 30 * 3600), age=30 * 3600)
+        self.tx(s["sessionId"], peer_in("m0", 30 * 3600), peer_in("m1", 7100))
+        agent(self.sub(s), "aged", {"description": "long gone"}, text_turn(), age=2 * 86400)
+        g = self.graph()
+        self.assertEqual([n["id"] for n in g["nodes"] if n["kind"] == "session"],
+                         [f"s:{s['sessionId']}", f"s:{recent}"])
+        peer = self.nodes[f"s:{recent}"]
+        self.assertEqual((peer["name"], peer["state"], peer["cwd"]), ("Recent peer", "ended", "/srv/x"))
+        self.assertEqual(self.edges[f"m:{recent}:{s['sessionId']}"]["count"], 1)
+        self.assertNotIn("a:aged", self.nodes)
+
+    def test_task_notification_overrides_a_stale_status(self):
+        s = self.lead()
+        sub = self.sub(s)
+        agent(sub, "X", {"description": "x", "toolUseId": "toolu_X"}, tool_turn(), age=120)
+        agent(sub, "W", {"description": "w", "toolUseId": "toolu_W"}, tool_turn(), age=0)
+        self.tx(s["sessionId"], task_note("toolu_X", "failed", 60), task_note("toolu_W", "completed", 600))
+        self.graph()
+        self.assertEqual(self.nodes["a:X"]["status"], "failed")
+        self.assertAlmostEqual(self.nodes["a:X"]["ended_at"], time.time() - 60, delta=5)
+        self.assertEqual(self.nodes["a:W"]["status"], "running")    # it wrote again after the notice
+
+    def test_roots_keep_their_place_when_one_blocks(self):
+        first, second = self.lead("first", age=900), self.lead("second", age=300)
+        self.session("third", "waiting", startedAt=int((time.time() - 600) * 1000), waitingFor="permission")
+        names = [n["name"] for n in self.graph()["nodes"] if n["kind"] == "session"]
+        self.assertEqual(names, ["first", "third", "second"])
+        self.assertTrue(first and second)
+
+    def test_new_messages_are_read_incrementally(self):
+        a, b = self.lead("a", age=900), self.lead("b", age=300)
+        self.tx(a["sessionId"], send_msg("t1", "b", "one"), send_result("t1", "m1"))
+        self.tx(b["sessionId"], peer_in("m1"))
+        self.graph()
+        key = f"m:{a['sessionId']}:{b['sessionId']}"
+        self.assertEqual(self.edges[key]["count"], 1)
+        with open(self.claude / "projects" / "-proj" / f"{a['sessionId']}.jsonl", "a") as f:
+            f.write(json.dumps(send_msg("t2", "b", "two")) + "\n" + json.dumps(send_result("t2", "m2")) + "\n")
+        with open(self.claude / "projects" / "-proj" / f"{b['sessionId']}.jsonl", "a") as f:
+            f.write(json.dumps(peer_in("m2")) + "\n")
+        self.graph()
+        self.assertEqual((self.edges[key]["count"], self.edges[key]["summary"]), (2, "two"))
+
+
 class TestServer(Sandbox):
     def setUp(self):
         super().setUp()
@@ -504,6 +833,20 @@ class TestServer(Sandbox):
         self.assertEqual(self.get("/static/app.js", cookie=tok)[0], 200)
         self.assertEqual(self.get("/static/..%2fherd.py", cookie=tok)[0], 404)
         self.assertEqual(self.get("/static/../herd.py", cookie=tok)[0], 404)
+
+    def test_graph_endpoint(self):
+        tok = self.server.token
+        self.assertEqual(self.get("/api/graph")[0], 401)
+        self.assertEqual(self.get("/api/graph", host="evil.example", cookie=tok)[0], 403)
+        status, headers, body = self.get("/api/graph", cookie=tok)
+        self.assertEqual((status, headers["Content-Type"]), (200, "application/json"))
+        g = json.loads(body)
+        self.assertEqual(set(g), {"now", "host", "window", "nodes", "edges"})
+        [n] = g["nodes"]
+        self.assertEqual((n["kind"], n["state"], n["waiting_for"], n["parent"]), ("session", "blocked", "dialog open", ""))
+        status, headers, body = self.get("/static/graph.js", cookie=tok)
+        self.assertEqual((status, headers["Content-Type"]), (200, "text/javascript; charset=utf-8"))
+        self.assertIn(b"const graphView", body)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux not installed")
