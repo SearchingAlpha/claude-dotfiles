@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -847,6 +848,347 @@ class TestServer(Sandbox):
         status, headers, body = self.get("/static/graph.js", cookie=tok)
         self.assertEqual((status, headers["Content-Type"]), (200, "text/javascript; charset=utf-8"))
         self.assertIn(b"const graphView", body)
+
+
+class TestUrl(Sandbox):
+    def setUp(self):
+        super().setUp()
+        os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "config")
+
+    def free_port(self) -> int:
+        s = herd.socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    def test_url_says_when_nothing_serves(self):
+        port = self.free_port()
+        r = self.herd("url", "-p", str(port))
+        self.assertEqual(r.returncode, 1)
+        tok = (self.tmp / "config" / "herd" / "token").read_text().strip()
+        self.assertEqual(r.stdout, f"http://127.0.0.1:{port}/?t={tok}\n")   # alone, for $(herd url)
+        self.assertIn(f"tmux new -d -s herd-ui herd serve -p {port}", r.stderr)
+        self.assertEqual((self.tmp / "config" / "herd" / "token").stat().st_mode & 0o777, 0o600)
+
+    def test_url_and_serve_find_a_running_dashboard(self):
+        server = herd.ThreadingHTTPServer(("127.0.0.1", 0), herd.Handler)
+        server.token = herd.token()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            port = server.server_address[1]
+            r = self.herd("url", "-p", str(port))
+            self.assertEqual((r.returncode, r.stdout), (0, f"http://127.0.0.1:{port}/?t={server.token}\n"))
+            self.assertIn(f"ssh -NL {port}:localhost:{port}", r.stderr)
+            again = self.herd("serve", "-p", str(port))
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertIn(f"already running: http://127.0.0.1:{port}/?t={server.token}", again.stdout)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertFalse(herd.answers(port))
+
+    def test_serve_port_from_a_command_line(self):
+        py = sys.executable
+        self.assertEqual(herd.serve_port([py, "/home/u/.local/bin/herd", "serve"]), herd.PORT)
+        self.assertEqual(herd.serve_port(["herd", "serve", "-p", "7801"]), 7801)
+        self.assertEqual(herd.serve_port([py, "herd.py", "serve", "--port=7802"]), 7802)
+        self.assertEqual(herd.serve_port([py, "herd.py", "serve", "-p7803"]), 7803)
+        self.assertIsNone(herd.serve_port([py, "herd.py", "url"]))
+        self.assertEqual(herd.serve_port([py, "-I", "herd.py", "serve", "-p", "7804"]), 7804)
+        self.assertIsNone(herd.serve_port(["vim", "herd.py", "serve"]))
+        self.assertIsNone(herd.serve_port([py, "other.py", "herd", "serve"]))
+
+
+def typed(text, age=0, **extra) -> dict:
+    """A prompt you typed in the CLI, as Claude Code records it."""
+    return {"type": "user", "entrypoint": "cli", "origin": {"kind": "human"}, "timestamp": iso(age),
+            "uuid": str(uuid.uuid4()), "message": {"role": "user", "content": text}, **extra}
+
+
+def said(text, age=0, **extra) -> dict:
+    return {**text_turn(text), "timestamp": iso(age), "uuid": str(uuid.uuid4()), **extra}
+
+
+class TestRecapWindow(unittest.TestCase):
+    LUX = herd.ZoneInfo("Europe/Luxembourg")
+
+    def at(self, y, m, d, hh=0, mm=0, tz=LUX) -> float:
+        return herd.datetime(y, m, d, hh, mm, tzinfo=tz).timestamp()
+
+    def window(self, spec, now, had=lambda t0, t1: False, tz=LUX):
+        return herd.recap_window(spec, now, tz, had)
+
+    def test_last_workday_skips_a_quiet_weekend(self):
+        monday = self.at(2026, 10, 12, 9)
+        friday_noon = self.at(2026, 10, 9, 12)
+        start, label = self.window(None, monday, lambda t0, t1: t0 <= friday_noon < t1)
+        self.assertEqual((start, label), (self.at(2026, 10, 9), "Fri 9 Oct 00:00"))
+        sunday = self.at(2026, 10, 11, 17)
+        self.assertEqual(self.window(None, monday, lambda t0, t1: t0 <= sunday < t1)[0], self.at(2026, 10, 11))
+        # Nothing in the last two weeks: yesterday.
+        self.assertEqual(self.window(None, monday)[0], self.at(2026, 10, 11))
+
+    def test_named_days(self):
+        monday, friday = self.at(2026, 10, 12, 9), self.at(2026, 10, 9, 9)
+        self.assertEqual(self.window("fri", monday)[0], self.at(2026, 10, 9))
+        self.assertEqual(self.window("Friday", monday)[0], self.at(2026, 10, 9))
+        self.assertEqual(self.window("fri", friday)[0], self.at(2026, 10, 2))     # never today
+        self.assertEqual(self.window("thu", friday)[0], self.at(2026, 10, 8))
+        self.assertEqual(self.window("today", monday)[0], self.at(2026, 10, 12))
+        self.assertEqual(self.window("yesterday", monday)[0], self.at(2026, 10, 11))
+        self.assertEqual(self.window("2026-10-09", monday)[0], self.at(2026, 10, 9))
+
+    def test_spans(self):
+        now = self.at(2026, 10, 12, 9)
+        self.assertEqual(self.window("6h", now)[0], now - 6 * 3600)
+        self.assertEqual(self.window("2d", now)[0], now - 2 * 86400)
+
+    def test_days_are_cut_in_the_zone(self):
+        now = self.at(2026, 10, 12, 9)
+        utc = self.window("fri", now, tz=timezone.utc)[0]
+        self.assertEqual(self.window("fri", now)[0], utc - 2 * 3600)           # CEST is UTC+2
+
+    def test_unreadable(self):
+        for bad in ("bogus", "fr", "-2d", "2026-13-01"):
+            with self.assertRaises(ValueError):
+                self.window(bad, time.time())
+
+    def test_zone_from_the_environment(self):
+        saved = dict(os.environ)
+        try:
+            os.environ.pop("HERD_TZ", None)
+            self.assertIsNone(herd.recap_tz())
+            os.environ["HERD_TZ"] = "Europe/Luxembourg"
+            self.assertEqual(str(herd.recap_tz()), "Europe/Luxembourg")
+            for bad in ("Mars/Base", "Europe"):                       # Europe is a directory
+                os.environ["HERD_TZ"] = bad
+                with self.assertRaises(ValueError):
+                    herd.recap_tz()
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+
+class TestAsk(unittest.TestCase):
+    def test_section_under_a_lead_in(self):
+        reply = ("Fixed the gate; all 13 pass.\n\n**Your turn:**\n1. Merge #12.\n2. Release it.\n\n"
+                 "## Notes\nignore this")
+        self.assertEqual(herd.ask_of(reply), "Your turn: 1. Merge #12. 2. Release it.")
+        self.assertEqual(herd.ask_of("Done.\n\n## Next steps\n- push\n- tell the team"),
+                         "## Next steps - push - tell the team")
+        self.assertEqual(herd.ask_of("Two things are still open:\n- push\n- publish"),
+                         "Two things are still open: - push - publish")
+
+    def test_last_paragraph_otherwise(self):
+        self.assertEqual(herd.ask_of("Built it.\n\nIt runs in **6 s**.\n\n```\ncode\n```"), "It runs in 6 s.")
+        self.assertEqual(herd.ask_of(""), "")
+
+    def test_code_blocks_are_not_prose(self):
+        self.assertEqual(herd.ask_of("Run it:\n\n```bash\n# next steps: build\nmake\n```\n\nAll green."), "All green.")
+        self.assertEqual(herd.ask_of("Done.\n\n```python\ndef f():\n\n    pass\n```"), "Done.")
+        self.assertEqual(herd.ask_of("**Your turn:**\n```\ndeploy/release.sh\n```\n## Notes\nx"),
+                         "Your turn: ``` deploy/release.sh ```")
+
+    def test_a_mention_is_not_a_lead_in(self):
+        self.assertEqual(herd.ask_of("I said the next steps are easy, and they were.\n\nAll merged."),
+                         "All merged.")
+
+
+FAKE_SHEPHERD = """#!/bin/sh
+cat <<'EOF'
+%s
+EOF
+"""
+
+
+class TestRecap(Sandbox):
+    def setUp(self):
+        super().setUp()
+        for v in ("HERD_TZ", "CLAUDE_CODE_SESSION_ID"):
+            os.environ.pop(v, None)
+        os.environ["HERD_SHEPHERD"] = ""
+
+    def tx(self, sid, *records, project="-proj"):
+        write_jsonl(self.claude / "projects" / project / f"{sid}.jsonl", *records)
+
+    def recap(self, *args) -> dict:
+        r = self.herd("recap", "--json", *args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def names(self, rc) -> list:
+        return [s["name"] for s in rc["sessions"]]
+
+    def git(self, cwd, *args):
+        subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                       check=True, capture_output=True)
+
+    def test_only_prompts_you_typed_count(self):
+        self.tx("aaaa1111", typed("fix the login test", 3600), said("Fixed.", 3000),
+                {"type": "ai-title", "aiTitle": "Login fix"})
+        headless = typed("Reply with ok.", 3600, entrypoint="sdk-cli")
+        headless.pop("origin")
+        self.tx("bbbb2222", headless, said("ok", 3000))
+        self.tx("cccc3333",
+                {**typed("<command-name>/clear</command-name>", 3600), "origin": None},
+                {**typed("skill body", 3500), "isMeta": True},
+                {**typed("<task-notification>done</task-notification>", 3400), "origin": {"kind": "task-notification"}},
+                {**typed("This session is being continued…", 3300), "isCompactSummary": True},
+                typed("[Request interrupted by user]", 3200),
+                said("…", 3000))
+        self.tx("dddd4444", typed("an old ask", 9 * 3600), said("Done long ago.", 60))
+        rc = self.recap("6h")
+        self.assertEqual(self.names(rc), ["Login fix"])
+        [s] = rc["sessions"]
+        self.assertEqual((s["state"], s["live"], s["prompt_count"], s["ask"]), ("ended", False, 1, "Fixed."))
+        self.assertEqual([p["text"] for p in s["prompts"]], ["fix the login test"])
+
+    def test_one_prompt_probes_fold(self):
+        self.tx("aaaa1111", typed("count the md files", 600), said("12.", 560),
+                {"type": "ai-title", "aiTitle": "Count md files"})
+        self.tx("bbbb2222", typed("start", 900), typed("and then?", 600), said("Done.", 590))
+        rc = self.recap("6h")
+        self.assertEqual(self.names(rc), ["bbbb2222"])
+        self.assertEqual([(f["name"], f["prompt"]) for f in rc["folded"]], [("Count md files", "count the md files")])
+        text = self.herd("recap", "6h").stdout
+        self.assertIn("+1 short session (one prompt, under 3 min): Count md files", text)
+
+    def test_live_sessions_lead_and_need_no_new_prompt(self):
+        blocked = self.session("api", "waiting", waitingFor="permission prompt")
+        self.transcript(blocked, typed("deploy it", 7200), said("Running the deploy.", 7100))
+        idle = self.session("old", "idle")
+        self.transcript(idle, typed("an old ask", 30 * 3600), said("Answered.", 29 * 3600))
+        self.tx("aaaa1111", typed("one", 900), typed("two", 600), said("Ended.", 500))
+        rc = self.recap("6h")
+        self.assertEqual(self.names(rc), ["api", "old", "aaaa1111"])
+        api = rc["sessions"][0]
+        self.assertEqual((api["state"], api["live"], api["flags"][0]), ("blocked", True, "permission prompt"))
+        self.assertEqual(rc["sessions"][1]["prompt_count"], 0)
+
+    def test_the_calling_session_is_left_out(self):
+        self.tx("aaaa1111-0000", typed("one", 900), typed("two", 600), said("Ended.", 500))
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "aaaa1111-0000"
+        self.assertEqual(self.recap("6h")["sessions"], [])
+
+    def test_a_bg_job_replaces_its_past(self):
+        first = typed("plan it", 3000)
+        self.tx("aaaa1111", first, said("Moving to the background.", 2900),
+                {"type": "continued-in", "continuedInSessionId": "bbbb2222", "timestamp": iso(2900)})
+        self.tx("bbbb2222", first, typed("go on", 1200), said("Done in the background.", 600))
+        self.assertEqual(self.names(self.recap("6h")), ["bbbb2222"])
+        # Typing on in the original after the hand-off keeps it.
+        with open(self.claude / "projects" / "-proj" / "aaaa1111.jsonl", "a") as f:
+            f.write(json.dumps(typed("one more thing", 300)) + "\n")
+        self.assertEqual(sorted(self.names(self.recap("6h"))), ["aaaa1111", "bbbb2222"])
+
+    def test_a_live_session_stays_after_a_hand_off(self):
+        lead = self.session("lead", "idle")
+        first = typed("plan it", 3000)
+        self.transcript(lead, first, said("Sent to the background.", 2900),
+                        {"type": "continued-in", "continuedInSessionId": "bbbb2222", "timestamp": iso(2900)})
+        self.tx("bbbb2222", first, typed("go on", 1200), said("Done.", 600))
+        self.assertEqual(sorted(self.names(self.recap("6h"))), ["bbbb2222", "lead"])
+
+    def test_a_quick_probe_is_no_workday(self):
+        three = 3 * 86400
+        self.tx("aaaa1111", typed("real work", three + 600), typed("more", three), said("Done.", three - 600))
+        self.tx("bbbb2222", typed("capital of France?", 86400), said("Paris.", 86400 - 30))
+        rc = herd.recap()
+        day = datetime.fromtimestamp(time.time() - three).date()
+        self.assertEqual(rc["since"], datetime(day.year, day.month, day.day).timestamp())
+        self.assertEqual(([s["session_id"] for s in rc["sessions"]], [f["session_id"] for f in rc["folded"]]),
+                         (["aaaa1111"], ["bbbb2222"]))
+
+    def test_a_long_window_reaches_old_files(self):
+        old = 20 * 86400
+        write_jsonl(self.claude / "projects" / "-proj" / "aaaa1111.jsonl", typed("old", old + 600),
+                    typed("work", old), said("Done.", old - 600), age=old - 600)
+        self.assertEqual(self.names(self.recap("30d")), ["aaaa1111"])
+        self.assertEqual(self.names(self.recap("2d")), [])
+
+    def test_git_state_of_where_it_worked(self):
+        local = self.tmp / "local"
+        local.mkdir()
+        self.git(local, "init", "-q", "-b", "main")
+        (local / "a.txt").write_text("a")
+        self.git(local, "add", "a.txt")
+        self.git(local, "commit", "-qm", "a")
+        (local / "b.txt").write_text("b")
+        bare = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        self.git(local, "remote", "add", "origin", str(bare))
+        self.git(local, "push", "-q", "-u", "origin", "main")
+        self.git(local, "commit", "-q", "--allow-empty", "-m", "b")
+        island = self.tmp / "island"
+        island.mkdir()
+        self.git(island, "init", "-q", "-b", "main")
+        for sid, cwd in (("aaaa1111", local), ("bbbb2222", island)):
+            self.tx(sid, typed("one", 900, cwd=str(cwd)), typed("two", 600, cwd=str(cwd)), said("Ended.", 500))
+        rc = {s["session_id"]: s for s in self.recap("6h")["sessions"]}
+        self.assertEqual(rc["aaaa1111"]["flags"], ["1 dirty", "↑1"])
+        self.assertEqual(rc["bbbb2222"]["flags"], ["no remote"])
+        self.assertTrue(rc["aaaa1111"]["open"])
+
+    def test_branch_and_repos_as_they_are_now(self):
+        repo, plain = self.tmp / "repo", self.tmp / "plain"
+        repo.mkdir()
+        plain.mkdir()
+        self.git(repo, "init", "-q", "-b", "main")
+        (repo / "a.txt").write_text("a")
+        # Claude Code records a worktree's branch as HEAD; git says what it is.
+        self.tx("aaaa1111", typed("one", 900, cwd=str(repo), gitBranch="HEAD"),
+                typed("two", 600, cwd=str(repo), gitBranch="HEAD"), said("Ended.", 500))
+        # Ended in a folder that is no repo, after working in one: the repo's flags say which.
+        self.tx("bbbb2222", typed("one", 900, cwd=str(repo), gitBranch="main"),
+                typed("two", 600, cwd=str(plain), gitBranch="main"), said("Ended.", 500, cwd=str(plain)))
+        rc = {s["session_id"]: s for s in self.recap("6h")["sessions"]}
+        self.assertEqual((rc["aaaa1111"]["branch"], rc["aaaa1111"]["flags"]), ("main", ["1 dirty", "no remote"]))
+        self.assertEqual((rc["bbbb2222"]["branch"], rc["bbbb2222"]["flags"]), ("", ["repo: 1 dirty", "no remote"]))
+        self.assertEqual(rc["bbbb2222"]["cwds"], [str(repo), str(plain)])
+
+    def test_a_detached_head_has_nothing_to_push(self):
+        det, bare = self.tmp / "det", self.tmp / "det.git"
+        det.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        self.git(det, "init", "-q", "-b", "main")
+        self.git(det, "commit", "-q", "--allow-empty", "-m", "a")
+        self.git(det, "remote", "add", "origin", str(bare))
+        self.git(det, "checkout", "-q", "--detach")
+        g = herd.git_state(str(det), {})
+        self.assertEqual((g["branch"], herd._git_flags(g)), ("", ([], False)))
+
+    def test_shepherd_tracks_and_loose_ends(self):
+        wt = self.tmp / "wt-fix"
+        wt.mkdir()
+        board = {"repos": [{"name": "app", "main": "main", "unpushed": 2, "tracks": [
+            {"name": "fix", "status": "review", "goal": "fix it", "worktree": str(wt), "branch": "fix",
+             "agent": {"session_id": "aaaa1111", "name": "fixer", "live": False}, "ahead": 1, "behind": 0,
+             "dirty_count": 3, "sha": "abc", "warnings": ["owner session ended"],
+             "review": {"id": "5", "state": "open", "url": "https://example.com/pull/5", "pushed_sha": "abc",
+                        "checked_at": 1}},
+            {"name": "docs", "status": "merged", "worktree": str(self.tmp / "wt-docs"), "agent": {},
+             "warnings": ["merged — run `shepherd finish`"],
+             "review": {"id": "R-9", "state": "merged", "url": "https://example.com/r/R-9"}}]}]}
+        fake = self.tmp / "fake-shepherd"
+        fake.write_text(FAKE_SHEPHERD % json.dumps(board))
+        fake.chmod(0o755)
+        os.environ["HERD_SHEPHERD"] = str(fake)
+        self.tx("aaaa1111", typed("one", 900, cwd=str(wt)), typed("two", 600, cwd=str(wt)),
+                said("PR is up.", 500), {"type": "pr-link", "prUrl": "https://example.com/pull/5"},
+                {"type": "pr-link", "prUrl": "https://example.com/pull/7"})
+        rc = self.recap("6h")
+        [s] = rc["sessions"]
+        self.assertEqual(s["flags"], ["#5 open", "3 dirty", "owner session ended", "PR 7"])
+        self.assertEqual(([t["track"] for t in s["tracks"]], s["git"], s["open"]), (["fix"], [], True))
+        self.assertEqual([(t["track"], t["flags"]) for t in rc["loose_ends"]],
+                         [("", ["2 commits on main not pushed"]),
+                          ("docs", ["R-9 merged", "merged — run `shepherd finish`"])])
+
+    def test_bad_window(self):
+        r = self.herd("recap", "someday")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("cannot read 'someday'", r.stderr)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux not installed")
