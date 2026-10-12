@@ -8,6 +8,8 @@
     herd serve [-p PORT]                     dashboard on 127.0.0.1: the list, and a graph view
     herd url [-p PORT]                       the dashboard's URL, and whether it is running
     herd recap [since] [--json]              what you left open since your last workday
+    herd recap --save-summary < topics.json  the recap skill's topics, for the Recap page
+    herd resume <name> [--detach]            back into a session: claude --resume in tmux
 
 Read-only over what Claude Code already writes: its session registry
 (~/.claude/sessions/<pid>.json), transcripts and workflow journals, plus shepherd's
@@ -21,10 +23,12 @@ import argparse
 import errno
 import http.client
 import json
+import math
 import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1408,7 +1412,7 @@ def ask_of(reply: str) -> str:
                                                  or (bare.endswith(":") and len(bare) < 80)))
         if lead and _ASK.search(bare):
             end = next((j for j in range(i + 1, len(lines)) if heading[j]), len(lines))
-            return cut("\n".join(lines[i:end]).replace("**", ""), ASK_CAP)
+            return cut(re.sub(r"^\s*#{1,6}\s+", "", "\n".join(lines[i:end]).replace("**", "")), ASK_CAP)
     prose = "\n".join(ln for ln, f in zip(lines, fenced) if not f)
     paras = [p for p in re.split(r"\n\s*\n", prose) if p.strip()]
     return cut(paras[-1].replace("**", ""), ASK_CAP) if paras else ""
@@ -1505,6 +1509,60 @@ def _git_flags(g: dict) -> tuple[list[str], bool]:
     return flags, bool(flags)
 
 
+def _files(n: int) -> str:
+    return f"{n} changed file{'' if n == 1 else 's'}"
+
+
+def _todo(state: str, waiting_for: str, views: list, gits: list) -> list[str]:
+    """The next steps herd can tell from a session's state alone. Those only its last message
+    knows (a decision, a dated wait) come from the recap skill's summary."""
+    out = []
+    if state == "blocked":
+        out.append("Answer it in its terminal" + (f" (waiting for: {waiting_for})" if waiting_for else ""))
+    for v in views:
+        rv, name = v["review"], v["track"]
+        rid = rv["id"] if rv and rv["id"] != "review" else "its review"
+        if rv and rv["state"] == "changes_requested":
+            out.append(f"Answer the review comments on {rid}")
+        elif rv and rv["state"] == "draft":
+            out.append(f"Mark {rid} ready for review, then get it merged")
+        elif rv and rv["state"] in ("open", "approved", "unknown"):
+            out.append(f"Get {rid} merged" + (": it is approved" if rv["state"] == "approved" else ""))
+        if v["unpushed"]:
+            out.append(f"Send the new commits on {name} to its review: `shepherd pr`")
+        elif not rv and v["ahead"]:
+            out.append(f"Open a review for {name}: `shepherd pr`")
+        if v["dirty"]:
+            out.append(f"Commit or drop the {_files(v['dirty'])} on {name}")
+        if any("finish" in w for w in v["warnings"]):
+            out.append(f"Close the track: `shepherd finish {name}`")
+    for g in gits:
+        repo = os.path.basename(g["root"]) or g["root"]
+        if g["dirty"]:
+            out.append(f"Commit or drop the {_files(g['dirty'])} in {repo}")
+        if not g["remote"]:
+            out.append(f"Give {repo} a remote: this disk holds its only copy")
+        elif g["gone"]:
+            out.append(f"Push {g['branch'] or 'the branch'} in {repo} again: the branch it tracked is gone")
+        elif not g["upstream"] and g["branch"]:
+            out.append(f"Push {g['branch']} in {repo}: it has never been pushed")
+        elif g["ahead"]:
+            out.append(f"Push the {g['ahead']} commit{'' if g['ahead'] == 1 else 's'} in {repo}")
+    return out
+
+
+def _opener(sid: str, row: dict) -> dict:
+    """How to get back into a session from a terminal: attach to its tmux pane, resume it in a
+    new one, or, live outside tmux, where to find it."""
+    if not row:
+        return {"how": "resume", "cmd": f"herd resume {sid[:8]}", "note": ""}
+    if row.get("tmux"):
+        return {"how": "attach", "cmd": f"herd go {sid[:8]}", "note": ""}
+    if row.get("kind") == "bg":
+        return {"how": "none", "cmd": "", "note": "Runs in the background, with no terminal"}
+    return {"how": "none", "cmd": "", "note": f"Live outside tmux (pid {row.get('pid')}): switch to its terminal"}
+
+
 def _when(ts: float, now: float, tz) -> str:
     if not ts:
         return "-"
@@ -1563,16 +1621,16 @@ def recap(spec: Optional[str] = None, now: Optional[float] = None) -> dict:
         cwd = s["cwd"] or row.get("cwd") or ""
         cwds = [os.path.realpath(c) for c in (s["cwds"] or [cwd]) if c][::-1]     # the latest first
 
-        def holds(t: dict, cwds=cwds) -> bool:
-            wt = os.path.realpath(t["worktree"]) + "/" if t.get("worktree") else ""
-            return bool(wt) and any((c + "/").startswith(wt) for c in cwds)
-        # Every track the session owns or worked in, and the state of every other repo it worked in.
-        own = [(repo, t) for repo, t in tracks if (t.get("agent") or {}).get("session_id") == sid or holds(t)]
+        def holds(t: dict, c: str) -> bool:
+            return bool(t.get("worktree") and c and (c + "/").startswith(os.path.realpath(t["worktree"]) + "/"))
+        # The tracks the session owns or ended in, and the state of every other repo it worked in.
+        # A track worktree it only passed through belongs to that track's owner (or the loose ends).
+        own = [(repo, t) for repo, t in tracks
+               if (t.get("agent") or {}).get("session_id") == sid or (cwds and holds(t, cwds[0]))]
         views = [_track_view(repo, t) for repo, t in own]
-        held = [os.path.realpath(t["worktree"]) + "/" for _, t in own if t.get("worktree")]
         gits, roots = [], set()
         for c in cwds[:5]:
-            g = None if any((c + "/").startswith(w) for w in held) else git_state(c, git_cache)
+            g = None if any(holds(t, c) for _, t in tracks) else git_state(c, git_cache)
             if g and g["root"] not in roots:
                 roots.add(g["root"])
                 gits.append(g)
@@ -1611,6 +1669,7 @@ def recap(spec: Optional[str] = None, now: Optional[float] = None) -> dict:
             "prompts": [{"at": p["at"], "text": p["text"]} for p in mine[sid][-RECENT_PROMPTS:]],
             "ask": ask_of(reply_text), "final_reply": reply_text, "prs": s["prs"],
             "tracks": views, "git": gits, "flags": flags, "open": bool(row) or open_,
+            "todo": _todo(state, row.get("waiting_for") or "", views, gits), "opener": _opener(sid, row),
         })
     rows.sort(key=lambda r: (ORDER.get(r["state"], 3 if r["open"] else 4), -r["last_at"]))
     loose = []
@@ -1657,6 +1716,193 @@ def render_recap(rc: dict, width: int, color: bool) -> str:
         out += ["", paint("2", cut(f"+{n} short session{'' if n == 1 else 's'} (one prompt, under "
                                    f"{SHORT // 60} min): " + ", ".join(f["name"] for f in rc["folded"]), width))]
     return "\n".join(out) + "\n"
+
+
+# --- the recap summary ---------------------------------------------------------------
+#
+# Topics: the sessions grouped into pieces of work, each with where it stands and its next steps,
+# written by the rules in skills/recap/TOPICS.md. The recap skill saves them with
+# `herd recap --save-summary` (JSON on stdin); the dashboard's Summarize button has Claude write
+# them headless, with no tools at all: herd builds the recap JSON, Claude reads it on stdin and
+# answers with the topics, and herd checks and saves them. The input is untrusted (your prompts,
+# replies, titles), so the run that reads it can do nothing but answer.
+
+SUMMARY_TOPICS, SUMMARY_ACTIONS, SUMMARY_SESSIONS = 40, 8, 20
+SUMMARY_TIMEOUT = 600   # s a headless summary may take before it is stopped
+TOPICS = Path(__file__).resolve().parent.parent.parent / "skills" / "recap" / "TOPICS.md"
+_summarizer: dict = {"thread": None, "proc": None, "started_at": 0.0, "since": "", "error": ""}
+_summarizer_lock = threading.Lock()
+
+
+def state_dir() -> Path:
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "herd"
+
+
+def summary_path() -> Path:
+    return state_dir() / "recap-summary.json"
+
+
+def clean_summary(raw) -> dict:
+    """A summary as the skill writes it, checked and trimmed; ValueError when it is not one."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("topics"), list):
+        raise ValueError("a summary is a JSON object with a \"topics\" list")
+    topics = []
+    for t in raw["topics"][:SUMMARY_TOPICS]:
+        if not isinstance(t, dict) or not str(t.get("title") or "").strip():
+            raise ValueError("every topic needs a \"title\"")
+        acts, sids = t.get("actions") or [], t.get("sessions") or []
+        if not isinstance(acts, list) or not isinstance(sids, list):
+            raise ValueError("a topic's \"actions\" and \"sessions\" are lists")
+        topics.append({"title": cut(str(t["title"]), 120), "state": "done" if t.get("state") == "done" else "open",
+                       "summary": cut(str(t.get("summary") or ""), 400),
+                       "actions": [cut(str(a), 300) for a in acts if str(a).strip()][:SUMMARY_ACTIONS],
+                       "sessions": [str(s) for s in sids if str(s).strip()][:SUMMARY_SESSIONS]})
+    since = raw.get("since")
+    ok = isinstance(since, (int, float)) and not isinstance(since, bool) and math.isfinite(since)
+    return {"since": float(since) if ok else None,
+            "intro": cut(str(raw.get("intro") or ""), 400), "suggested": cut(str(raw.get("suggested") or ""), 400),
+            "topics": topics}
+
+
+def save_summary(raw) -> dict:
+    out = {"generated_at": time.time(), **clean_summary(raw)}
+    path = summary_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(out, f, indent=1)
+    os.replace(tmp, path)                       # a reader never sees half a file
+    return out
+
+
+def load_summary() -> Optional[dict]:
+    got = read_json(summary_path())
+    return got if isinstance(got, dict) and isinstance(got.get("topics"), list) else None
+
+
+def summary_from(text: str, rc: dict) -> dict:
+    """Claude's answer as topics: the JSON object in it (a code fence around it is fine), set to
+    the recap's own window, naming only sessions the recap holds. ValueError when there is none."""
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        raise ValueError("the answer holds no JSON object")
+    raw = json.loads(m.group(0))
+    if not isinstance(raw, dict):
+        raise ValueError("the answer is not a JSON object")
+    known = {s["session_id"] for s in rc["sessions"]}
+    for t in raw.get("topics") if isinstance(raw.get("topics"), list) else []:
+        if isinstance(t, dict) and isinstance(t.get("sessions"), list):
+            t["sessions"] = [x for x in t["sessions"] if str(x) in known]
+    raw["since"] = rc["since"]
+    return raw
+
+
+def _kill(proc) -> None:
+    """Stop a run and everything it started: it leads its own process group."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            proc.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _summarize(cmd: list, payload: str, env: dict, d: Path, rc: dict) -> None:
+    """The headless run, in its own thread: feed it the recap, stop it when it takes too long,
+    and save the topics it answers with."""
+    err, out = "", ""
+    fd = os.open(d / "summarize.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)                        # also when an older herd made it
+    with os.fdopen(fd, "w") as log:
+        try:
+            proc = subprocess.Popen(cmd, cwd=d, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
+                                    env=env, start_new_session=True, text=True)
+        except OSError as e:
+            with _summarizer_lock:
+                _summarizer["error"] = f"could not start {cmd[0]}: {e.strerror}"
+            return
+        with _summarizer_lock:
+            _summarizer["proc"] = proc
+        try:
+            out, _ = proc.communicate(payload, timeout=SUMMARY_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+            err = f"stopped after {SUMMARY_TIMEOUT // 60} minutes"
+    if not err and proc.returncode != 0:
+        try:
+            tail = (d / "summarize.log").read_text(errors="replace").strip().splitlines()[-1:]
+        except OSError:
+            tail = []
+        err = f"Claude exited with {proc.returncode}" + (f": {cut(tail[0], 200)}" if tail else "")
+    elif not err:
+        try:
+            reply = json.loads(out)             # --output-format json: {"result": …, "is_error": …}
+            if not isinstance(reply, dict):
+                raise ValueError("not a result object")
+            if reply.get("is_error"):
+                raise ValueError(str(reply.get("result") or "Claude reported an error"))
+            save_summary(summary_from(str(reply.get("result") or ""), rc))
+        except ValueError as e:
+            err = f"Claude's answer wasn't topics: {cut(str(e), 200)}"
+    with _summarizer_lock:
+        _summarizer.update(error=err, proc=None)
+
+
+def summarize_start(spec: Optional[str], rc: dict) -> dict:
+    """Have Claude write topics for this recap, unless a run is going. It runs headless with no
+    tools, MCP servers, skills or hooks, and leaves no transcript: it can only answer."""
+    with _summarizer_lock:
+        t = _summarizer["thread"]
+        if t is not None and t.is_alive():
+            return _status()
+        _summarizer.update(thread=None, proc=None, started_at=time.time(), since=spec or "", error="")
+        try:
+            rules = TOPICS.read_text()
+        except OSError:
+            _summarizer["error"] = f"can't read the topic rules in {TOPICS}"
+            return _status()
+        d = state_dir()
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(d, 0o700)                      # it holds your prompts and replies
+        prompt = ("The JSON on stdin is the output of `herd recap --json`. Following the rules below, answer "
+                  "with the topics JSON object only, with nothing before or after it.\n\n" + rules)
+        cmd = [os.environ.get("HERD_CLAUDE") or "claude", "-p", "--tools", "", "--strict-mcp-config",
+               "--disable-slash-commands", "--no-session-persistence",
+               "--settings", json.dumps({"disableAllHooks": True}), "--output-format", "json", "--", prompt]
+        env = {k: v for k, v in os.environ.items() if k not in SESSION_ENV}
+        th = threading.Thread(target=_summarize, args=(cmd, json.dumps(rc), env, d, rc), daemon=True)
+        _summarizer["thread"] = th
+        th.start()
+        return _status()
+
+
+def summarize_stop() -> None:
+    with _summarizer_lock:
+        proc = _summarizer["proc"]
+    if proc is not None and proc.poll() is None:
+        _kill(proc)
+
+
+def _status() -> dict:
+    s = _summarizer
+    running = s["thread"] is not None and s["thread"].is_alive()
+    err = "" if running else s["error"]
+    if err:
+        saved = load_summary()                  # a newer summary (a /recap since) outdates the failure
+        if saved and (saved.get("generated_at") or 0) > s["started_at"]:
+            err = ""
+    return {"running": running, "started_at": s["started_at"] or None, "error": err}
+
+
+def summarize_status() -> dict:
+    with _summarizer_lock:
+        return _status()
 
 
 # --- commands ------------------------------------------------------------------------
@@ -1759,7 +2005,108 @@ def cmd_go(args) -> int:
     return 0
 
 
+def _project_slug(cwd: str) -> str:
+    """The folder Claude Code files a session's transcripts under, for the folder it started in."""
+    return re.sub(r"[^A-Za-z0-9-]", "-", cwd)
+
+
+def find_session(key: str) -> Optional[dict]:
+    """A session that may have ended, by session id prefix (4+ characters), name or title. Live
+    ones first, then transcripts newest first. {session_id, name, cwd, row}: cwd is the folder to
+    resume it from (the one its newest transcript is filed under), row its live entry or None."""
+    for r in sessions():
+        if _matches(key, r):
+            return {"session_id": r["session_id"], "name": r["name"], "cwd": r["cwd"], "row": r}
+    paths = sorted((claude_dir() / "projects").glob("*/*.jsonl"), key=_mtime, reverse=True)
+    hit = next((p for p in paths if len(key) >= 4 and p.stem.startswith(key)), None) \
+        or next((p for p in paths[:500] if _ended_info(p)["name"] == key), None)
+    if hit is None:
+        return None
+    s = story(_main_transcripts(hit.stem))
+    cwd = next((c for c in reversed(s["cwds"]) if _project_slug(c) == hit.parent.name), "") \
+        or (s["cwds"][-1] if s["cwds"] else "")         # else the folder it worked in last
+    names = s["names"]
+    name = names.get("custom-title") or names.get("ai-title") or names.get("agent-name") or hit.stem[:8]
+    return {"session_id": hit.stem, "name": name, "cwd": cwd, "row": None}
+
+
+def _resuming(sid: str) -> Optional[str]:
+    """The tmux session already running `claude --resume <sid>`, if any: claude takes a moment to
+    register, and a second copy in that moment would write the same conversation."""
+    r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{session_name}\t#{pane_start_command}"],
+                       capture_output=True, text=True)
+    for ln in r.stdout.splitlines():
+        name, _, start = ln.partition("\t")
+        if re.search(rf"--resume\W+{re.escape(sid)}\b", start):
+            return name
+    return None
+
+
+def _tmux_name(name: str, sid: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")[:24].strip("-") or "resume"
+    for cand in (base, f"{base}-{sid[:4]}", *(f"{base}-{sid[:4]}-{i}" for i in range(2, 10))):
+        if not _tmux_has(cand):
+            return cand
+    return f"resume-{sid[:8]}"
+
+
+def cmd_resume(args) -> int:
+    hit = find_session(args.name)
+    if not hit:
+        print(f"herd: no session called `{args.name}` (a session id prefix, name or title)", file=sys.stderr)
+        return 1
+    row = hit["row"]
+    if row:
+        if row["tmux"]:
+            if args.detach:
+                print(f"`{row['name']}` is live in tmux {row['tmux']} — herd go {args.name}")
+                return 0
+            return cmd_go(argparse.Namespace(name=args.name))
+        where = "runs in the background" if row["kind"] == "bg" else \
+            f"is live in a terminal outside tmux (pid {row['pid']}, {row['cwd']})"
+        print(f"herd: `{row['name']}` {where}; switch to it there, since a second copy would split "
+              "the conversation", file=sys.stderr)
+        return 1
+    if not shutil.which("tmux"):
+        print("herd: tmux is not installed", file=sys.stderr)
+        return 1
+    already = _resuming(hit["session_id"])
+    if already:
+        print(f"`{hit['name']}` is already resuming in tmux session `{already}` — herd go {already}")
+        if args.detach:
+            return 0
+        verb = "switch-client" if os.environ.get("TMUX") else "attach-session"
+        os.execvp("tmux", ["tmux", verb, "-t", already])
+    cwd = hit["cwd"]
+    if not cwd or not os.path.isdir(cwd):
+        print(f"herd: `{hit['name']}` started in {cwd or 'a folder herd can not tell'}, which is gone, "
+              "so claude can't find the conversation from there", file=sys.stderr)
+        return 1
+    tname = _tmux_name(hit["name"], hit["session_id"])
+    unset = [a for v in SESSION_ENV for a in ("-u", v)]
+    claude = os.environ.get("HERD_CLAUDE") or "claude"
+    r = subprocess.run(["tmux", "new-session", "-d", "-s", tname, "-c", cwd,
+                        "env", *unset, claude, "--resume", hit["session_id"]])
+    if r.returncode != 0:
+        return r.returncode
+    print(f"resumed `{hit['name']}` in tmux session `{tname}` ({short_dir(cwd, 60)}) — herd go {tname}")
+    if args.detach:
+        return 0
+    verb = "switch-client" if os.environ.get("TMUX") else "attach-session"
+    os.execvp("tmux", ["tmux", verb, "-t", tname])
+    return 0
+
+
 def cmd_recap(args) -> int:
+    if args.save_summary:
+        try:
+            saved = save_summary(json.loads(sys.stdin.read()))
+        except ValueError as e:                 # bad JSON is a ValueError too
+            print(f"herd: not a recap summary: {e}", file=sys.stderr)
+            return 2
+        n = len(saved["topics"])
+        print(f"saved {n} topic{'' if n == 1 else 's'} for the dashboard's Recap page ({summary_path()})")
+        return 0
     try:
         rc = recap(args.since)
     except ValueError as e:
@@ -1816,14 +2163,44 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _authed(self) -> bool:
+        jar = SimpleCookie(self.headers.get("Cookie") or "")
+        return COOKIE in jar and secrets.compare_digest(jar[COOKIE].value, self.server.token)
+
+    def _json(self, code: int, obj) -> None:
+        self._send(code, json.dumps(obj).encode(), "application/json")
+
+    def do_POST(self):  # noqa: N802
+        # Starting Claude is the one thing this server does besides reading, so on top of the
+        # local Host and the cookie it wants the same origin and a header no plain form can send.
+        host = self.headers.get("Host") or ""
+        if host.rsplit(":", 1)[0] not in LOCAL_HOSTS:
+            return self._send(403, b"forbidden host", "text/plain")
+        origin = self.headers.get("Origin")
+        if self.headers.get("X-Herd") != "1" or (origin is not None and urlparse(origin).netloc != host):
+            return self._send(403, b"forbidden origin", "text/plain")
+        if not self._authed():
+            return self._send(401, b"Open the URL printed by `herd serve` (it carries the access token).", "text/plain")
+        if urlparse(self.path).path != "/api/recap/summarize":
+            return self._send(404, b"not found", "text/plain")
+        try:
+            body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 4096)) or b"{}")
+            spec = (body.get("since") if isinstance(body, dict) else None) or None
+            if spec is not None and not isinstance(spec, str):
+                raise ValueError("since is a string such as friday or 2d")
+            with self.lock:
+                rc = recap(spec)                # also checks the window
+        except ValueError as e:
+            return self._json(400, {"error": str(e)})
+        return self._json(202, summarize_start(spec, rc))
+
     def do_GET(self):  # noqa: N802
         # Only a page served from this machine may read it: a foreign Host is DNS rebinding.
         if (self.headers.get("Host") or "").rsplit(":", 1)[0] not in LOCAL_HOSTS:
             return self._send(403, b"forbidden host", "text/plain")
         url = urlparse(self.path)
         tok = self.server.token
-        jar = SimpleCookie(self.headers.get("Cookie") or "")
-        authed = COOKIE in jar and secrets.compare_digest(jar[COOKIE].value, tok)
+        authed = self._authed()
         given = parse_qs(url.query).get("t", [""])[0]
         if not authed and given and secrets.compare_digest(given, tok):
             return self._send(302, b"", "text/plain", {
@@ -1843,6 +2220,18 @@ class Handler(BaseHTTPRequestHandler):
                 g = graph()
             return self._send(200, json.dumps({"now": int(time.time()), "host": os.uname().nodename, **g}).encode(),
                               "application/json")
+        if url.path == "/api/recap":
+            spec = parse_qs(url.query).get("since", [""])[0] or None
+            with self.lock:
+                try:
+                    rc = recap(spec)
+                except ValueError as e:
+                    return self._json(400, {"error": str(e)})
+                rc["summary"], rc["summarizing"] = load_summary(), summarize_status()
+            for r in rc["sessions"]:
+                r.pop("final_reply", None)      # the page shows the ↳ line; the full reply is the skill's
+                r["dir"] = short_dir(r["cwd"], 60)
+            return self._json(200, {"now": int(time.time()), "host": os.uname().nodename, **rc})
         name = "index.html" if url.path in ("/", "/index.html") else \
             url.path[len("/static/"):] if url.path.startswith("/static/") else ""
         f = STATIC / name
@@ -1940,6 +2329,7 @@ def cmd_serve(args) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        summarize_stop()                        # a summary run doesn't outlive the dashboard
         server.server_close()
     return 0
 
@@ -1965,6 +2355,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("since", nargs="?", help="today, yesterday, friday, 2d, 6h or 2026-10-09 "
                                             "(default: 00:00 of your last workday; days cut in $HERD_TZ)")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--save-summary", action="store_true",
+                   help="save the recap skill's topics (JSON on stdin) for the dashboard's Recap page")
+    p = sub.add_parser("resume", help="back into a session, ended or not: claude --resume in tmux, or herd go")
+    p.add_argument("name", help="a session id prefix (as the Recap page copies it), name or title")
+    p.add_argument("--detach", action="store_true", help="start it in tmux without attaching")
     if not argv or argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
         argv = ["ls", *argv]
     extra: list[str] = []
@@ -1974,7 +2369,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     args.claude_args = extra
     return {"ls": cmd_ls, "watch": cmd_watch, "new": cmd_new, "go": cmd_go,
-            "serve": cmd_serve, "url": cmd_url, "recap": cmd_recap}[args.cmd](args)
+            "serve": cmd_serve, "url": cmd_url, "recap": cmd_recap, "resume": cmd_resume}[args.cmd](args)
 
 
 if __name__ == "__main__":

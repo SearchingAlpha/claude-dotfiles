@@ -2,7 +2,7 @@
 
 herd answers one question: **which of my Claude Code sessions needs me right now?** It lists every live session on the machine — blocked ones first, then the ones that finished their turn, then the ones still working — with what each was last asked and where it runs. `herd serve` shows the same thing as a local web dashboard, with each session's workflows and subagents underneath, and a graph view of what every session started and who messaged whom. `herd recap` answers the morning question, **what did I leave open?**, for sessions that have ended too. It can also start sessions inside tmux so they survive a dropped SSH connection, and jump you into one.
 
-It is the light sibling of [shepherd](../shepherd/README.md): no tracks, no reviews, no hooks and no daemon. It only reads what Claude Code already writes (and, for the recap, what shepherd and `git status` report); the one thing it keeps is the dashboard's access token. Stdlib only, Python 3.9+, Linux.
+It is the light sibling of [shepherd](../shepherd/README.md): no tracks, no reviews, no hooks and no daemon. It only reads what Claude Code already writes (and, for the recap, what shepherd and `git status` report); all it keeps is the dashboard's access token and the recap skill's last summary. Stdlib only, Python 3.9+, Linux.
 
 ```mermaid
 flowchart LR
@@ -43,6 +43,7 @@ herd watch                    # redraw every 2 s (-n SECS); rings the bell when 
 herd serve                    # dashboard on http://127.0.0.1:7798 (-p PORT); already running: prints its URL
 herd url                      # the dashboard's URL with its token, and the ssh line to reach it from a laptop
 herd recap                    # what you left open since your last workday (or: friday, yesterday, 2d, 2026-10-09)
+herd resume 7b2d4e61          # back into a session, even an ended one: claude --resume in a new tmux session
 herd new api ~/src/api        # start `claude --name api` in a detached tmux session `api`
 herd new api ~/src/api -- --model opus   # everything after -- goes to claude
 herd go api                   # attach to it (switch-client when already inside tmux)
@@ -68,12 +69,12 @@ working    1m  sca-serving-layer (bg)       ~                        -          
 herd recap · since Fri 9 Oct 00:00 (Europe/Paris) · 4 sessions, 1 live
 
 STATE    LAST        NAME                         DIR                      BRANCH           OPEN
-blocked  Fri 20:48   ontology-research            ~                        -                input needed · tmux ontology-research:0.0
+blocked  Fri 20:48   search-tuning                ~                        -                input needed · tmux search-tuning:0.0
   ↳ Plan approved. I'll first check whether the two open reviews have merged.
-ended    Fri 18:11   release fixes                ~/src/bot-release-fixes  release-fixes    #41 open · 2 dirty
-  ↳ Your turn: 1. Merge #41. 2. Run deploy/release.sh from this worktree.
-ended    Fri 12:21   team app                     ~/src/app-upload         upload           ↑1
-  ↳ Before you send it: decide where feedback goes, and who tests outside the team.
+ended    Fri 18:11   api v2                       ~/src/api-v2             api-v2           #41 open · 2 dirty
+  ↳ Your turn: 1. Merge #41. 2. Run make deploy from this worktree.
+ended    Fri 12:21   docs redesign                ~/src/docs-site          redesign         ↑1
+  ↳ Before you publish: decide where feedback goes, and who reviews the copy.
 ended    Fri 10:35   wording help                 ~                        -                -
   ↳ Suggested rewrite delivered; check whether "the two teams" should name them.
 
@@ -95,7 +96,11 @@ LOOSE ENDS — shepherd tracks no session above shows
   herd fetches nothing: review states are the ones shepherd last stored.
 - **Loose ends** are the tracks in shepherd-enrolled repos that no listed session owns or worked in, plus local main commits not pushed. That is where a track whose session ended long ago shows up.
 - **Folded:** an ended session with a single prompt that lasted under 3 minutes (a probe, a quick question) is folded into the last line.
-- `--json` carries all of it, plus each session's last five prompts and full last reply. The `recap` skill (`skills/recap`) reads it to write the "waiting on you / finished / suggested order" summary.
+- `--json` carries all of it, plus each session's last five prompts, full last reply, plain next steps (`todo`) and the command that takes you back to it (`opener`). The `recap` skill (`skills/recap`) reads it to write the "waiting on you / finished / suggested order" summary, and saves its topics with `herd recap --save-summary` for the dashboard's Recap page.
+- **`herd resume <session>`** takes a session id prefix, name or title.
+  - **Live in tmux:** it attaches, like `herd go`.
+  - **Ended:** it starts `claude --resume <id>` in a new tmux session, in the folder the conversation is filed under, and attaches. With `--detach` it only starts it.
+  - **Live outside tmux:** it refuses, since a second copy would split the conversation.
 
 ## The dashboard
 
@@ -113,6 +118,38 @@ Click a session (or `j`/`k` and Enter) to open it: folder and branch, a *Copy he
 Colour is kept for what needs you: red only for blocked sessions, amber only for stalled or failed work and quiet sessions. With nothing wrong the page is grey and still. The tab title counts what needs you (`(2) herd · host`), the favicon turns red while a session is blocked, and the footer offers browser notifications for sessions that block.
 
 *Not in tmux* on a session means it was started in a plain terminal (a VS Code terminal, an SSH shell): herd can tell you its folder but `herd go` can't take you there, and it ends if that terminal closes. Sessions started with `herd new` run in tmux.
+
+### The recap page
+
+**Recap** in the header (or `r`, or `…/#recap`; `…/#recap=friday` for another window) shows what you left open since your last workday, one topic per piece of work:
+
+```text
+Since Fri 9 Oct 00:00 · 4 open · 2 done
+Summarized by Claude at 08:30 · 1 session changed since · Summarize again
+
+●  API v2 rollout                                                  Fri 18:11
+   Both reviews merged; the deploy from the rollout worktree hasn't run.
+   – Run `make deploy` from the api-v2 worktree
+   – `shepherd finish api-v2`
+   api v2          finished its turn · Fri 18:11        [Copy herd go 3f9c1a2e]
+○  Docs site redesign                                              Fri 12:21
+   One commit isn't pushed, and the launch post waits on two decisions.
+   – Push the commit in docs-site
+   docs redesign   ended · Fri 12:21                    [Copy herd resume 7b2d4e61]
+```
+
+- **Topics** come from the recap skill. Claude groups the sessions into pieces of work, each with a one- or two-line summary of where it stands and its next steps.
+  - **Summarize with Claude** has Claude write them headless, in a minute or two. herd builds the recap and hands it over on stdin, with the rules in [`skills/recap/TOPICS.md`](../../skills/recap/TOPICS.md). Claude runs with no tools, MCP servers, skills or hooks and leaves no transcript, so it can only answer; herd checks the answer and saves it. `/recap` in any session saves topics too, after re-checking GitHub reviews.
+  - The page shows the newest summary saved for its window, stamped with its time and with how many sessions changed since.
+  - Sessions the summary doesn't cover yet sit under *New since the summary*.
+- **Without a summary** each session is its own topic. It shows the session's last message (muted, two lines) and the steps herd can tell from its state alone: a review to merge, files to commit, commits to push, a track to finish, a repo with no remote.
+- **Every session line** has the command that takes you back. Copy it and paste it in your SSH terminal.
+  - A live session in tmux gets `herd go`.
+  - An ended one gets `herd resume`.
+  - A live session outside tmux says so; switch to its terminal.
+- **Live state, reviews and repo state** are herd's own and current; only the topic text is Claude's.
+- *Done* topics fold to one line. Loose ends and short sessions follow, as in `herd recap`.
+- **Keys:** `j`/`k` move through the topics, `c` copies the focused topic's first command, `r` goes back.
 
 ### The graph
 
@@ -149,6 +186,12 @@ Colour is kept for what needs you: red only for blocked sessions, amber only for
 - Transcripts are read incrementally: each poll reads only what was appended since the last one.
 - `herd new` unsets the calling session's identity variables (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, the messaging socket…) so a session started from inside another doesn't inherit it.
 - The dashboard listens on 127.0.0.1 only, answers only requests whose `Host` is local (no DNS rebinding), and needs the token kept in `~/.config/herd/token` (mode 0600) — the page shows your prompts.
+- The dashboard's one write is **Summarize**, a POST that starts a headless Claude.
+  - On top of the local Host and the cookie (`SameSite=Strict`), it needs an `X-Herd` header that no plain form can send. When the browser sends an `Origin`, it must match the page.
+  - The recap it reads is untrusted (your prompts, replies, titles), so the run gets nothing to act with: `--tools ""`, `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, and `disableAllHooks`. `--allowedTools` would not be enough, since it only adds to your own permissions.
+  - Only one run goes at a time. After 10 minutes it is stopped with its whole process group, and also when `herd serve` exits.
+  - Its stderr goes to `~/.local/state/herd/summarize.log` and the topics to `~/.local/state/herd/recap-summary.json` (both 0600, under `$XDG_STATE_HOME`).
+  - `HERD_CLAUDE` changes the command.
 
 ## Limits
 

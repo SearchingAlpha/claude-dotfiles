@@ -8,14 +8,21 @@
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 <script src="/static/graph.js" defer></script>
+<script src="/static/recap.js" defer></script>
 </head>
 <body>
 <header class="top">
   <div class="bar">
-    <span class="brand" title="j/k move · Enter open · c copy herd go · Esc close · g graph">herd</span>
+    <span class="brand" title="j/k move · Enter open · c copy the command · Esc close · r recap · g graph">herd</span>
     <span class="verdict" id="verdict" aria-live="polite"></span>
     <span class="counts" id="counts"></span>
-    <button type="button" class="view" id="view" aria-pressed="false" aria-controls="graph">Graph</button>
+    <nav class="views" aria-label="Views">
+      <button type="button" class="view" data-view="" aria-pressed="true" aria-controls="app">List</button>
+      <button type="button" class="view" data-view="recap" aria-pressed="false" aria-controls="recap"
+              title="What you left open (r)">Recap</button>
+      <button type="button" class="view" data-view="graph" aria-pressed="false" aria-controls="graph"
+              title="Sessions as a graph (g)">Graph</button>
+    </nav>
     <span class="host" id="host" aria-live="polite"></span>
   </div>
 </header>
@@ -23,6 +30,7 @@
   <p class="note" id="msg">Reading sessions…</p>
 </main>
 <main id="graph" class="graph" hidden aria-label="Sessions, what they started and who they messaged"></main>
+<main id="recap" class="recap" hidden aria-label="What you left open since your last workday"></main>
 <footer class="foot" id="foot"></footer>
 </body>
 </html>
