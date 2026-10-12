@@ -1,8 +1,8 @@
 # herd
 
-herd answers one question: **which of my Claude Code sessions needs me right now?** It lists every live session on the machine — blocked ones first, then the ones that finished their turn, then the ones still working — with what each was last asked and where it runs. `herd serve` shows the same thing as a local web dashboard, with each session's workflows and subagents underneath, and a graph view of what every session started and who messaged whom. It can also start sessions inside tmux so they survive a dropped SSH connection, and jump you into one.
+herd answers one question: **which of my Claude Code sessions needs me right now?** It lists every live session on the machine — blocked ones first, then the ones that finished their turn, then the ones still working — with what each was last asked and where it runs. `herd serve` shows the same thing as a local web dashboard, with each session's workflows and subagents underneath, and a graph view of what every session started and who messaged whom. `herd recap` answers the morning question, **what did I leave open?**, for sessions that have ended too. It can also start sessions inside tmux so they survive a dropped SSH connection, and jump you into one.
 
-It is the light sibling of [shepherd](../shepherd/README.md): no tracks, no reviews, no hooks and no daemon. It only reads what Claude Code already writes; the one thing it keeps is the dashboard's access token. Stdlib only, Python 3.9+, Linux.
+It is the light sibling of [shepherd](../shepherd/README.md): no tracks, no reviews, no hooks and no daemon. It only reads what Claude Code already writes (and, for the recap, what shepherd and `git status` report); the one thing it keeps is the dashboard's access token. Stdlib only, Python 3.9+, Linux.
 
 ```mermaid
 flowchart LR
@@ -14,13 +14,15 @@ flowchart LR
   end
   proc["/proc<br/>is the pid still that session?"]
   tmux["tmux list-panes<br/>which pane runs it"]
+  shep["shepherd status --all --json<br/>git status (recap only)"]
   reg --> herd(["herd"])
   tr --> herd
   wf --> herd
   sub --> herd
   proc --> herd
   tmux --> herd
-  herd --> cli(["terminal list"])
+  shep --> herd
+  herd --> cli(["terminal list · recap"])
   herd --> web(["dashboard on 127.0.0.1"])
 ```
 
@@ -38,7 +40,9 @@ The second line is optional: [`tmux.conf`](tmux.conf) turns on mouse-wheel scrol
 ```bash
 herd                          # the list (same as `herd ls`); --json for scripts
 herd watch                    # redraw every 2 s (-n SECS); rings the bell when a session blocks
-herd serve                    # dashboard on http://127.0.0.1:7798 (-p PORT)
+herd serve                    # dashboard on http://127.0.0.1:7798 (-p PORT); already running: prints its URL
+herd url                      # the dashboard's URL with its token, and the ssh line to reach it from a laptop
+herd recap                    # what you left open since your last workday (or: friday, yesterday, 2d, 2026-10-09)
 herd new api ~/src/api        # start `claude --name api` in a detached tmux session `api`
 herd new api ~/src/api -- --model opus   # everything after -- goes to claude
 herd go api                   # attach to it (switch-client when already inside tmux)
@@ -56,9 +60,46 @@ working    1m  sca-serving-layer (bg)       ~                        -          
 - **NAME** — the session name; auto-derived names like `pablomv-6a` are replaced by the session's AI title. `(bg)` marks background sessions.
 - **TMUX** — the pane running it, if any; `herd go` accepts a tmux session name, a session name or title, a pid or a session-id prefix.
 
+## The recap
+
+`herd recap` lists every session you typed a prompt in since your last workday, including ones that have ended, most in need of you first:
+
+```text
+herd recap · since Fri 9 Oct 00:00 (Europe/Paris) · 4 sessions, 1 live
+
+STATE    LAST        NAME                         DIR                      BRANCH           OPEN
+blocked  Fri 20:48   ontology-research            ~                        -                input needed · tmux ontology-research:0.0
+  ↳ Plan approved. I'll first check whether the two open reviews have merged.
+ended    Fri 18:11   release fixes                ~/src/bot-release-fixes  release-fixes    #41 open · 2 dirty
+  ↳ Your turn: 1. Merge #41. 2. Run deploy/release.sh from this worktree.
+ended    Fri 12:21   team app                     ~/src/app-upload         upload           ↑1
+  ↳ Before you send it: decide where feedback goes, and who tests outside the team.
+ended    Fri 10:35   wording help                 ~                        -                -
+  ↳ Suggested rewrite delivered; check whether "the two teams" should name them.
+
+LOOSE ENDS — shepherd tracks no session above shows
+  dotfiles docs (review): #6 open · owner session ended · 14 behind origin/main
+
++3 short sessions (one prompt, under 3 min): probe, count md files, capital of France
+```
+
+- **Which sessions:** a prompt counts when you typed it (Claude Code marks it `origin: human`). Headless `claude -p` runs, skill and command expansions, task notifications and messages from other sessions don't count. Live sessions are listed even with no new prompt; the session you run it from isn't. A session handed off to a background job is listed once, as the job, unless you kept typing in the original.
+- **The window:** with no argument, from 00:00 of the latest day before today on which you typed anything (so on a Monday after a quiet weekend, Friday). Or pass `today`, `yesterday`, a weekday (`fri`, the latest past one), `6h`, `2d` or `2026-10-09`. Days are cut in `$HERD_TZ` (an IANA name such as `Europe/Paris`), else in the system's zone. Set it if the machine runs on UTC and you don't.
+- **↳** is what the session's last message handed back to you: the section under its first "Your turn:", "Next steps", "Still open:" or similar lead-in, else its last paragraph.
+- **OPEN** is what is true now, not what the transcript said:
+  - the session's shepherd tracks: review state, uncommitted files, commits not in the review, shepherd's warnings;
+  - otherwise the `git status` of the folder it worked in: `N dirty`, `↑N` (commits its upstream lacks), `never pushed`, `no remote`;
+  - PRs it opened that no track covers;
+  - its tmux pane, if live.
+
+  herd fetches nothing: review states are the ones shepherd last stored.
+- **Loose ends** are the tracks in shepherd-enrolled repos that no listed session owns or worked in, plus local main commits not pushed. That is where a track whose session ended long ago shows up.
+- **Folded:** an ended session with a single prompt that lasted under 3 minutes (a probe, a quick question) is folded into the last line.
+- `--json` carries all of it, plus each session's last five prompts and full last reply. The `recap` skill (`skills/recap`) reads it to write the "waiting on you / finished / suggested order" summary.
+
 ## The dashboard
 
-`herd serve` prints a URL like `http://127.0.0.1:7798/?t=<token>`; open it once and the token moves into a cookie. On a remote machine, forward the port first (VS Code: *Ports → Forward*, or `ssh -L 7798:localhost:7798 <host>`). To keep it running, start it in tmux: `tmux new -d -s herd-ui herd serve`.
+`herd serve` prints a URL like `http://127.0.0.1:7798/?t=<token>`; open it once and the token moves into a cookie. On a remote machine, forward the port first (VS Code: *Ports → Forward*, or `ssh -NL 7798:localhost:7798 <host>`). To keep it running, start it in tmux: `tmux new -d -s herd-ui herd serve`. Lost the URL? `herd url` prints it again, with the `ssh` line for this machine, and tells you if no dashboard is running. Its stdout is the URL alone, so `$(herd url)` works. `herd serve` on a port where one already runs prints its URL instead of failing.
 
 The page answers three questions, in this order, without a click: does anything need me, and for what; what finished so I can read it; is the long-running work healthy. The header says it in one sentence (`1 needs you`, `1 waiting for your reply · 6 working`, `Nothing needs you`), and sessions come in four groups:
 
@@ -111,7 +152,8 @@ Colour is kept for what needs you: red only for blocked sessions, amber only for
 
 ## Limits
 
-- The session registry, workflow journals and transcripts are undocumented Claude Code files (written against CLI 2.1.294–2.1.295). If a release changes them, `sessions()`, `workflows()`, `subagents()` and, for the graph, `_interaction()` in `herd.py` are the places to fix. A record herd can't read means a missing edge, never an error.
+- The session registry, workflow journals and transcripts are undocumented Claude Code files (written against CLI 2.1.294–2.1.296). If a release changes them, `sessions()`, `workflows()`, `subagents()`, for the graph `_interaction()`, and for the recap `_story_line()` and `_typed()` (`origin.kind`, `entrypoint`, `isCompactSummary`, `pr-link`) in `herd.py` are the places to fix. A record herd can't read means a missing edge or session, never an error.
+- The recap reads every transcript written since the window starts, in full, once per run (under a second for a few days here). It only knows git state on this machine and the review states shepherd last stored.
 - Sessions on other machines don't show up, nor do messages to them; run herd on each machine (over SSH it works as is).
 - The graph's first load reads each transcript written in the last 24 h once (well under a second here); after that it reads only new bytes.
 - Child sessions started with `claude -p` from a Bash call aren't linked to their parent: nothing on disk records the link.
@@ -124,4 +166,4 @@ Colour is kept for what needs you: red only for blocked sessions, amber only for
 python3 -m unittest discover -s harnesses/herd/tests -t harnesses/herd/tests
 ```
 
-They use a fake Claude config dir (`CLAUDE_CONFIG_DIR`), fake sessions and workflow runs, a dashboard on a random port and a private tmux server (`TMUX_TMPDIR`), so they never touch your real sessions.
+They use a fake Claude config dir (`CLAUDE_CONFIG_DIR`), fake sessions and workflow runs, throwaway git repos, a fake `shepherd` (`HERD_SHEPHERD`), a dashboard on a random port and a private tmux server (`TMUX_TMPDIR`), so they never touch your real sessions.

@@ -1,7 +1,7 @@
 {
   "name": "claude-dotfiles",
   "description": "Personal productivity and engineering skills",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": {
     "name": "SearchingAlpha"
   },
@@ -19,7 +19,8 @@
     "./skills/to-issues",
     "./skills/code-review",
     "./skills/roast-my-post",
-    "./skills/impeccable"
+    "./skills/impeccable",
+    "./skills/recap"
   ],
   "agents": [
     "./agents/impeccable-asset-producer.md",

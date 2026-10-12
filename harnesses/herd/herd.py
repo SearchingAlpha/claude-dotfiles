@@ -6,30 +6,37 @@
     herd new <name> [dir] [-- claude args…]  start claude in a detached tmux session
     herd go <name>                           attach (or switch) to a session's tmux pane
     herd serve [-p PORT]                     dashboard on 127.0.0.1: the list, and a graph view
+    herd url [-p PORT]                       the dashboard's URL, and whether it is running
+    herd recap [since] [--json]              what you left open since your last workday
 
 Read-only over what Claude Code already writes: its session registry
-(~/.claude/sessions/<pid>.json), transcript tails and workflow journals. No hooks and
-no state of its own beyond the dashboard's access token. Stdlib only, Python 3.9+.
+(~/.claude/sessions/<pid>.json), transcripts and workflow journals, plus shepherd's
+status and `git status` for the recap. No hooks and no state of its own beyond the
+dashboard's access token. Stdlib only, Python 3.9+.
 See harnesses/herd/README.md."""
 
 from __future__ import annotations
 
 import argparse
+import errno
+import http.client
 import json
 import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Registry status → herd state, in attention order.
 STATES = {"waiting": "blocked", "idle": "done", "busy": "working", "shell": "working"}
@@ -1220,6 +1227,438 @@ def summary(rows: list[dict]) -> str:
     return f"{n['blocked']} blocked · {n['done']} done · {n['working']} working"
 
 
+# --- the recap -----------------------------------------------------------------------
+#
+# `herd recap [since]` answers "what did I leave open?": every session you drove since your
+# last workday, ended ones too, with what its last message asked of you, its live state and
+# the track, review and git state of where it worked. A prompt is yours when you typed it:
+# Claude Code marks those origin {kind: human}. Headless runs (entrypoint sdk-…), skill and
+# command expansions, task notifications and messages from other sessions carry no such mark.
+
+RECAP_LOOKBACK = 14     # days searched back for your last workday
+SHORT = 180             # an ended one-prompt session shorter than this (s) folds into one line
+REPLY_CAP, ASK_CAP, PROMPT_CAP, RECENT_PROMPTS = 6000, 400, 300, 5
+DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_STORY_NEEDLES = (b'"human"', b'"assistant"', b'-title"', b'"agent-name"', b'"pr-link"', b'"continued-in"')
+_TITLES = {"custom-title": "customTitle", "ai-title": "aiTitle", "agent-name": "agentName"}
+# A lead-in (a heading, a bold line or a short line ending in ":") that hands over to you.
+_ASK = re.compile(r"your (?:turn|move|steps?)|next steps?|still open|waiting on you|before you|"
+                  r"after (?:you )?merg|open items|left to do|\bto do\b|not (?:yet )?(?:tested|verified)", re.I)
+_HEADING = re.compile(r"^\s*(?:#{1,6}\s|\*\*[^*]+\*\*:?\s*$)")
+_story_cache: dict = {}
+
+
+def recap_tz():
+    """The zone the recap cuts days in: HERD_TZ (an IANA name such as Europe/Paris), else
+    None, the system's local time. A machine kept on UTC needs it to cut days where you live."""
+    name = os.environ.get("HERD_TZ")
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):    # OSError: a directory such as "Europe"
+        raise ValueError(f"unknown time zone HERD_TZ={name!r}") from None
+
+
+def _local(ts: float, tz) -> datetime:
+    return datetime.fromtimestamp(ts, tz)
+
+
+def _midnight(day: date, tz) -> float:
+    return datetime(day.year, day.month, day.day, tzinfo=tz).timestamp()
+
+
+def _stamp(ts: float, tz) -> str:
+    d = _local(ts, tz)
+    return f"{d:%a} {d.day} {d:%b} {d:%H:%M}"
+
+
+def recap_window(spec: Optional[str], now: float, tz, had_prompts) -> tuple[float, str]:
+    """Where the recap starts, and how to say it. With no spec, 00:00 of your last workday:
+    the latest day before today on which you typed a prompt (had_prompts(t0, t1) says whether
+    you did between two times), up to RECAP_LOOKBACK days back, else yesterday. Otherwise
+    today, yesterday, a weekday (the latest past one, never today), Nh / Nd, or YYYY-MM-DD."""
+    today = _local(now, tz).date()
+    s = (spec or "").strip().lower()
+    if not s:
+        end = _midnight(today, tz)
+        day = next((today - timedelta(days=k) for k in range(1, RECAP_LOOKBACK + 1)
+                    if had_prompts(_midnight(today - timedelta(days=k), tz), end)), today - timedelta(days=1))
+    elif s == "today":
+        day = today
+    elif s == "yesterday":
+        day = today - timedelta(days=1)
+    elif len(s) >= 3 and any(d.startswith(s) for d in DAYS):
+        want = next(i for i, d in enumerate(DAYS) if d.startswith(s))
+        day = today - timedelta(days=(today.weekday() - want - 1) % 7 + 1)
+    else:
+        m = re.fullmatch(r"(\d+)\s*([hd])", s)
+        if m:
+            start = now - int(m.group(1)) * (3600 if m.group(2) == "h" else 86400)
+            return start, _stamp(start, tz)
+        try:
+            day = date.fromisoformat(s)
+        except ValueError:
+            raise ValueError(f"cannot read {spec!r}: try friday, yesterday, 2d, 6h or 2026-10-09") from None
+    start = _midnight(day, tz)
+    return start, _stamp(start, tz)
+
+
+def _typed(rec: dict) -> str:
+    """The text of a prompt you typed, or "" for anything else a user record carries."""
+    origin = rec.get("origin")
+    if not isinstance(origin, dict) or origin.get("kind") != "human" or rec.get("isMeta") \
+            or rec.get("isCompactSummary") or str(rec.get("entrypoint") or "").startswith("sdk"):
+        return ""
+    content = (rec.get("message") or {}).get("content")
+    if isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+        return ""
+    text = "\n".join(_texts(rec)).strip()
+    return "" if text.startswith("[Request interrupted") else text
+
+
+def _fresh_story() -> dict:
+    return {"prompts": [], "names": {}, "cwd": "", "cwds": [], "branch": "", "prs": [], "reply": None,
+            "continued": [], "last_at": 0.0}
+
+
+def _story_line(line: bytes, acc: dict) -> None:
+    """One prefiltered transcript line into a session's story: the prompts you typed, its
+    names, where it worked, PRs it opened, its newest assistant text, and any bg job it became."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(rec, dict):
+        return
+    kind = rec.get("type")
+    if kind in _TITLES:
+        if rec.get(_TITLES[kind]):
+            acc["names"][kind] = str(rec[_TITLES[kind]])
+        return
+    if kind == "pr-link":
+        if rec.get("prUrl") and rec["prUrl"] not in acc["prs"]:
+            acc["prs"].append(str(rec["prUrl"]))
+        return
+    if kind == "continued-in":
+        if rec.get("continuedInSessionId"):
+            acc["continued"].append(str(rec["continuedInSessionId"]))
+        return
+    if kind not in ("user", "assistant") or rec.get("isSidechain"):
+        return
+    if kind == "assistant" and (rec.get("message") or {}).get("model") == "<synthetic>":
+        return                                  # written by Claude Code, not by Claude: no activity
+    at = _epoch(rec.get("timestamp")) if rec.get("timestamp") else 0.0
+    cwd = rec.get("cwd")
+    if cwd and acc["cwd"] != cwd:               # every folder it worked in, the latest last
+        acc["cwds"] = [c for c in acc["cwds"] if c != cwd] + [cwd]
+        acc["cwd"] = cwd
+    branch = rec.get("gitBranch")
+    acc["branch"] = (branch if branch != "HEAD" else "") if branch is not None else acc["branch"]
+    acc["last_at"] = max(acc["last_at"], at)
+    if kind == "assistant":
+        text = "\n".join(t for t in _texts(rec) if t.strip()).strip()
+        if text:
+            acc["reply"] = {"at": at, "text": text if len(text) <= REPLY_CAP else "…" + text[-REPLY_CAP:]}
+        return
+    text = _typed(rec)
+    if text:
+        acc["prompts"].append({"at": at, "uuid": str(rec.get("uuid") or ""), "text": cut(text, PROMPT_CAP)})
+
+
+def story(paths: list[Path]) -> dict:
+    """A session's story across every main transcript it has (one per project dir), read
+    incrementally. A prompt copied into a second transcript counts once."""
+    accs = [_grow(p, _story_cache, _STORY_NEEDLES, _fresh_story, _story_line) for p in sorted(paths, key=_mtime)]
+    out = _fresh_story()
+    seen: set = set()
+    for a in accs:                              # oldest file first, so the newest wins
+        for p in a["prompts"]:
+            if not (p["uuid"] and p["uuid"] in seen):
+                seen.add(p["uuid"])
+                out["prompts"].append(p)
+        out["names"].update(a["names"])
+        out["cwd"] = a["cwd"] or out["cwd"]
+        out["cwds"] = [c for c in out["cwds"] if c not in a["cwds"]] + a["cwds"]
+        out["branch"] = a["branch"] or out["branch"]
+        out["prs"] += [u for u in a["prs"] if u not in out["prs"]]
+        if a["reply"] and (not out["reply"] or a["reply"]["at"] >= out["reply"]["at"]):
+            out["reply"] = a["reply"]
+        out["continued"] += a["continued"]
+        out["last_at"] = max(out["last_at"], a["last_at"])
+    out["prompts"].sort(key=lambda p: p["at"])
+    return out
+
+
+def ask_of(reply: str) -> str:
+    """What a session's last message hands over to you: the section under its first lead-in
+    that says so ("Your turn:", "## Next steps", "Still open:"), else its last paragraph."""
+    lines = reply.splitlines()
+    fenced, inside = [], False                  # a `# comment` in a code block is no heading
+    for ln in lines:
+        if ln.lstrip().startswith("```"):
+            inside = not inside
+            fenced.append(True)
+        else:
+            fenced.append(inside)
+    heading = [bool(_HEADING.match(ln)) and not f for ln, f in zip(lines, fenced)]
+    for i, ln in enumerate(lines):
+        bare = ln.strip().strip("#*").strip()
+        lead = heading[i] or (not fenced[i] and ((ln.lstrip().startswith("**") and len(bare) < 80)
+                                                 or (bare.endswith(":") and len(bare) < 80)))
+        if lead and _ASK.search(bare):
+            end = next((j for j in range(i + 1, len(lines)) if heading[j]), len(lines))
+            return cut("\n".join(lines[i:end]).replace("**", ""), ASK_CAP)
+    prose = "\n".join(ln for ln, f in zip(lines, fenced) if not f)
+    paras = [p for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    return cut(paras[-1].replace("**", ""), ASK_CAP) if paras else ""
+
+
+def shepherd_board() -> dict:
+    """`shepherd status --all --json`: tracks, reviews and their local state in every enrolled
+    repo, or {} without shepherd. HERD_SHEPHERD names another binary; set empty, it is skipped."""
+    exe = os.environ.get("HERD_SHEPHERD", "shepherd")
+    if not exe or not shutil.which(exe):
+        return {}
+    try:
+        r = subprocess.run([exe, "status", "--all", "--json"], capture_output=True, text=True, timeout=60)
+        board = json.loads(r.stdout) if r.returncode == 0 else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+    return board if isinstance(board, dict) else {}
+
+
+def git_state(cwd: str, cache: dict) -> Optional[dict]:
+    """The repo a session worked in, as it is now: uncommitted files, commits its upstream lacks,
+    and whether it has anywhere to push. Local only: no fetch."""
+    if cwd in cache:
+        return cache[cwd]
+    cache[cwd] = None
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    # --no-optional-locks: refreshing the index would take index.lock under another session's commit.
+    r = subprocess.run(["git", "--no-optional-locks", "-C", cwd, "status", "--porcelain=v1", "-b"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    lines = r.stdout.splitlines()
+    head = lines[0][3:] if lines and lines[0].startswith("## ") else ""
+    head = head[len("No commits yet on "):] if head.startswith("No commits yet on ") else \
+        "" if head.startswith("HEAD (no branch)") else head      # detached: no branch to push
+    track = re.search(r"\[([^\]]*)\]$", head)
+    counts = dict((w, int(n)) for w, n in re.findall(r"(ahead|behind) (\d+)", track.group(1))) if track else {}
+    remotes = subprocess.run(["git", "-C", cwd, "remote"], capture_output=True, text=True).stdout.split()
+    top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    cache[cwd] = {"root": top.stdout.strip(), "branch": re.split(r"\.\.\.| ", head, maxsplit=1)[0],
+                  "dirty": max(0, len(lines) - 1), "ahead": counts.get("ahead", 0),
+                  "behind": counts.get("behind", 0), "upstream": "..." in head,
+                  "gone": bool(track and track.group(1) == "gone"), "remote": bool(remotes)}
+    return cache[cwd]
+
+
+def _review_id(rv: dict) -> str:
+    rid = str(rv.get("id") or "")
+    return f"#{rid}" if rid.isdigit() else rid or "review"
+
+
+def _track_view(repo: dict, t: dict) -> dict:
+    rv, owner = t.get("review") or {}, t.get("agent") or {}
+    return {"repo": repo.get("name") or "", "track": t.get("name") or "", "status": t.get("status") or "",
+            "goal": t.get("goal") or "", "worktree": t.get("worktree") or "", "branch": t.get("branch") or "",
+            "owner": owner.get("name") or "", "owner_live": bool(owner.get("live")),
+            "ahead": t.get("ahead") or 0, "behind": t.get("behind") or 0, "dirty": t.get("dirty_count") or 0,
+            "unpushed": bool(rv.get("pushed_sha") and t.get("sha") and rv["pushed_sha"] != t["sha"]),
+            "review": {"id": _review_id(rv), "state": rv.get("state") or "unknown", "url": rv.get("url") or "",
+                       "checked_at": rv.get("checked_at"), "stale": bool(rv.get("stale"))}
+            if rv.get("url") or rv.get("id") else None,
+            "warnings": [str(w) for w in t.get("warnings") or []]}
+
+
+def _track_flags(v: dict) -> tuple[list[str], bool]:
+    """A track's flags, and whether any of them is still yours to act on."""
+    flags, open_ = [], v["status"] != "merged" or any("finish" in w for w in v["warnings"])
+    rv = v["review"]
+    if rv:
+        flags.append(f"{rv['id']} {rv['state']}")
+        if v["unpushed"]:
+            flags.append("commits not in review")
+    elif v["ahead"]:
+        flags.append(f"↑{v['ahead']} no review")
+    if v["dirty"]:
+        flags.append(f"{v['dirty']} dirty")
+    flags += v["warnings"]
+    return flags, open_ and bool(flags)
+
+
+def _git_flags(g: dict) -> tuple[list[str], bool]:
+    flags = []
+    if g["dirty"]:
+        flags.append(f"{g['dirty']} dirty")
+    if not g["remote"]:
+        flags.append("no remote")
+    elif g["gone"]:
+        flags.append("upstream gone")
+    elif not g["upstream"] and g["branch"]:
+        flags.append("never pushed")
+    elif g["ahead"]:
+        flags.append(f"↑{g['ahead']}")
+    return flags, bool(flags)
+
+
+def _when(ts: float, now: float, tz) -> str:
+    if not ts:
+        return "-"
+    d, today = _local(ts, tz), _local(now, tz).date()
+    if d.date() == today:
+        return f"today {d:%H:%M}"
+    return f"{d:%a %H:%M}" if (today - d.date()).days < 7 else f"{d:%d %b}"
+
+
+def recap(spec: Optional[str] = None, now: Optional[float] = None) -> dict:
+    """The sessions you drove since `spec` (see recap_window), most in need of you first,
+    with the shepherd tracks none of them shows, and the short sessions folded away."""
+    now = time.time() if now is None else now
+    tz = recap_tz()
+    files: dict = {}
+    for p in (claude_dir() / "projects").glob("*/*.jsonl"):
+        files.setdefault(p.stem, []).append(p)
+    newest = {sid: max(_mtime(p) for p in ps) for sid, ps in files.items()}
+    live = {r["session_id"]: r for r in sessions()}
+
+    def stories_since(t0: float) -> dict:
+        return {sid: story(ps) for sid, ps in files.items() if newest[sid] >= t0}
+
+    def probe(sid: str, s: dict) -> bool:
+        """An ended session with one prompt that lasted under SHORT: folded, not a workday."""
+        last = max(s["last_at"], (s["reply"] or {}).get("at") or 0.0)
+        return sid not in live and len(s["prompts"]) == 1 and last - s["prompts"][0]["at"] < SHORT
+
+    def had_prompts(t0: float, t1: float) -> bool:
+        return any(t0 <= p["at"] < t1 for sid, s in stories_since(t0).items() if not probe(sid, s)
+                   for p in s["prompts"])
+
+    start, label = recap_window(spec, now, tz, had_prompts)
+    stories = stories_since(start)
+    stories.update({sid: story(files[sid]) for sid in live if sid in files and sid not in stories})
+    board = shepherd_board()
+    tracks = [(repo, t) for repo in board.get("repos") or [] for t in repo.get("tracks") or []]
+    me, git_cache, shown = os.environ.get("CLAUDE_CODE_SESSION_ID"), {}, set()
+    mine = {sid: [p for p in s["prompts"] if p["at"] >= start] for sid, s in stories.items()}
+    picked = {sid for sid in stories if sid != me and (mine[sid] or sid in live)}
+    # A session continued in a bg job is that job's past, unless it still runs or you typed on in it.
+    picked -= {sid for sid in picked if sid not in live
+               and any(to in picked and {p["uuid"] for p in mine[sid]} <= {p["uuid"] for p in stories[to]["prompts"]}
+                       for to in stories[sid]["continued"])}
+    rows, folded = [], []
+    for sid in picked:
+        s, row, names = stories[sid], live.get(sid) or {}, stories[sid]["names"]
+        name = row.get("name") or names.get("custom-title") or names.get("ai-title") \
+            or names.get("agent-name") or sid[:8]
+        first = mine[sid][0]["at"] if mine[sid] else 0.0
+        last = max(s["last_at"], (s["reply"] or {}).get("at") or 0.0)
+        if probe(sid, s):
+            folded.append({"session_id": sid, "name": name, "when": _when(last, now, tz),
+                           "prompt": cut(s["prompts"][0]["text"], 120)})
+            continue
+        cwd = s["cwd"] or row.get("cwd") or ""
+        cwds = [os.path.realpath(c) for c in (s["cwds"] or [cwd]) if c][::-1]     # the latest first
+
+        def holds(t: dict, cwds=cwds) -> bool:
+            wt = os.path.realpath(t["worktree"]) + "/" if t.get("worktree") else ""
+            return bool(wt) and any((c + "/").startswith(wt) for c in cwds)
+        # Every track the session owns or worked in, and the state of every other repo it worked in.
+        own = [(repo, t) for repo, t in tracks if (t.get("agent") or {}).get("session_id") == sid or holds(t)]
+        views = [_track_view(repo, t) for repo, t in own]
+        held = [os.path.realpath(t["worktree"]) + "/" for _, t in own if t.get("worktree")]
+        gits, roots = [], set()
+        for c in cwds[:5]:
+            g = None if any((c + "/").startswith(w) for w in held) else git_state(c, git_cache)
+            if g and g["root"] not in roots:
+                roots.add(g["root"])
+                gits.append(g)
+        flags, open_, here = [], False, cwds[0] if cwds else ""
+        for g in gits:
+            more, also = _git_flags(g)
+            if more and not (here + "/").startswith(os.path.realpath(g["root"]) + "/"):
+                more = [f"{os.path.basename(g['root'])}: {more[0]}", *more[1:]]     # not where it ended
+            flags += more
+            open_ = open_ or also
+        for v in views:
+            shown.add((v["repo"], v["track"]))
+            more, also = _track_flags(v)
+            flags += [f"{v['track']}: {more[0]}", *more[1:]] if len(views) > 1 and more else more
+            open_ = open_ or also
+        reviewed = {v["review"]["url"] for v in views if v["review"]}
+        flags += [f"PR {u.rstrip('/').rsplit('/', 1)[-1]}" for u in s["prs"] if u not in reviewed]
+        state = row.get("state") or "ended"
+        if state == "blocked" and row.get("waiting_for"):
+            flags.insert(0, row["waiting_for"])
+        if row.get("tmux"):
+            flags.append(f"tmux {row['tmux']}")
+        reply_text = (s["reply"] or {}).get("text") or ""
+        # The branch as it is now: of the track or repo it last worked in; the transcript's only if
+        # that folder is gone (a finished worktree). Claude Code records a worktree's branch as HEAD.
+        track_here = next((t for _, t in own if t.get("worktree") and
+                           (here + "/").startswith(os.path.realpath(t["worktree"]) + "/")), None)
+        git_here = git_state(here, git_cache) if here and not track_here else None
+        branch = (track_here or {}).get("branch") or (git_here or {}).get("branch") \
+            or ("" if here and os.path.isdir(here) else s["branch"] or row.get("branch") or "")
+        rows.append({
+            "session_id": sid, "name": name, "title": names.get("ai-title") or "", "state": state,
+            "live": bool(row), "waiting_for": row.get("waiting_for") or "", "tmux": row.get("tmux") or "",
+            "cwd": cwd, "cwds": s["cwds"], "branch": branch, "first_at": first, "last_at": last,
+            "when": _when(last, now, tz), "prompt_count": len(mine[sid]),
+            "prompts": [{"at": p["at"], "text": p["text"]} for p in mine[sid][-RECENT_PROMPTS:]],
+            "ask": ask_of(reply_text), "final_reply": reply_text, "prs": s["prs"],
+            "tracks": views, "git": gits, "flags": flags, "open": bool(row) or open_,
+        })
+    rows.sort(key=lambda r: (ORDER.get(r["state"], 3 if r["open"] else 4), -r["last_at"]))
+    loose = []
+    for repo in board.get("repos") or []:
+        if repo.get("unpushed"):
+            loose.append({"repo": repo.get("name") or "", "track": "", "status": "main",
+                          "flags": [f"{repo['unpushed']} commits on {repo.get('main') or 'main'} not pushed"]})
+        for t in repo.get("tracks") or []:
+            v = _track_view(repo, t)
+            if (v["repo"], v["track"]) not in shown and not (me and (t.get("agent") or {}).get("session_id") == me):
+                loose.append({**v, "flags": _track_flags(v)[0]})
+    return {"since": start, "until": now, "label": label,
+            "tz": os.environ.get("HERD_TZ") or time.tzname[0], "sessions": rows, "loose_ends": loose,
+            "folded": sorted(folded, key=lambda f: f["name"])}
+
+
+def render_recap(rc: dict, width: int, color: bool) -> str:
+    paint = (lambda code, s: f"\x1b[{code}m{s}\x1b[0m") if color else (lambda code, s: s)
+    rows = rc["sessions"]
+    live = sum(r["live"] for r in rows)
+    top = f"herd recap · since {rc['label']} ({rc['tz']}) · {len(rows)} session{'' if len(rows) == 1 else 's'}" \
+        + (f", {live} live" if live else "")
+    out = [top, ""]
+    if not rows:
+        out.append("no prompts typed since then")
+    else:
+        head = f"{'STATE':8} {'LAST':11} {'NAME':28} {'DIR':24} {'BRANCH':16} "
+        out.append(paint("2", head + "OPEN"))
+        room = max(10, width - len(head))
+        for r in rows:
+            state = paint(COLOR.get(r["state"], "2"), f"{r['state']:8}")
+            fixed = (f" {r['when']:11} {cut(r['name'], 28):28} {short_dir(r['cwd'], 24):24} "
+                     f"{cut(r['branch'] or '-', 16):16} ")
+            out.append(state + fixed + paint("33" if r["open"] else "2", cut(" · ".join(r["flags"]) or "-", room)))
+            if r["ask"]:
+                out.append(paint("2", "  ↳ " + cut(r["ask"], max(10, width - 4))))
+    if rc["loose_ends"]:
+        out += ["", paint("2", "LOOSE ENDS — shepherd tracks no session above shows")]
+        for t in rc["loose_ends"]:
+            where = f"{t['repo']} {t['track']}" if t["track"] else t["repo"]
+            out.append("  " + cut(f"{where} ({t['status']}): " + (" · ".join(t["flags"]) or "clean"), width - 2))
+    if rc["folded"]:
+        n = len(rc["folded"])
+        out += ["", paint("2", cut(f"+{n} short session{'' if n == 1 else 's'} (one prompt, under "
+                                   f"{SHORT // 60} min): " + ", ".join(f["name"] for f in rc["folded"]), width))]
+    return "\n".join(out) + "\n"
+
+
 # --- commands ------------------------------------------------------------------------
 
 def cmd_ls(args) -> int:
@@ -1320,6 +1759,20 @@ def cmd_go(args) -> int:
     return 0
 
 
+def cmd_recap(args) -> int:
+    try:
+        rc = recap(args.since)
+    except ValueError as e:
+        print(f"herd: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(rc, indent=2))
+        return 0
+    color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    sys.stdout.write(render_recap(rc, shutil.get_terminal_size((160, 24)).columns, color))
+    return 0
+
+
 # --- dashboard -----------------------------------------------------------------------
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -1398,18 +1851,90 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, b"not found", "text/plain")
 
 
+PORT = 7798
+
+
+def dashboard_url(port: int) -> str:
+    return f"http://127.0.0.1:{port}/?t={token()}"
+
+
+def forward_hint(port: int) -> str:
+    return (f"from your laptop: ssh -NL {port}:localhost:{port} {socket.getfqdn()}  "
+            f"(or forward port {port} in VS Code's Ports tab)")
+
+
+def answers(port: int) -> bool:
+    """Whether a herd dashboard answers on 127.0.0.1:port (it says so in its Server header)."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        conn.request("GET", "/api/sessions", headers={"Host": f"127.0.0.1:{port}"})
+        r = conn.getresponse()
+        r.read()
+        return (r.getheader("Server") or "").startswith(Handler.server_version)
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
+def serve_port(argv: list[str]) -> Optional[int]:
+    """The port a command line runs `herd serve` on, or None when it is something else."""
+    at = 0
+    if argv and os.path.basename(argv[0]).startswith("python"):     # python3 [-I …] herd serve
+        at = next((i for i, a in enumerate(argv) if i and not a.startswith("-")), len(argv))
+    if at >= len(argv) or os.path.basename(argv[at]) not in ("herd", "herd.py") or argv[at + 1:at + 2] != ["serve"]:
+        return None
+    rest = argv[at + 2:]
+    for i, a in enumerate(rest):
+        if a in ("-p", "--port") and i + 1 < len(rest) and rest[i + 1].isdigit():
+            return int(rest[i + 1])
+        if a.startswith("--port=") and a[7:].isdigit():
+            return int(a[7:])
+        if a.startswith("-p") and a[2:].isdigit():
+            return int(a[2:])
+    return PORT
+
+
+def serving_port() -> Optional[int]:
+    """The port of a `herd serve` you already run on this machine, from its command line."""
+    for cmdline in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            if cmdline.parent.stat().st_uid != os.getuid():
+                continue
+            port = serve_port([a.decode(errors="replace") for a in cmdline.read_bytes().split(b"\0") if a])
+        except OSError:
+            continue
+        if port:
+            return port
+    return None
+
+
+def cmd_url(args) -> int:
+    port = args.port or serving_port() or PORT
+    print(dashboard_url(port), flush=True)
+    if not answers(port):
+        start = "herd serve" + ("" if port == PORT else f" -p {port}")
+        print(f"herd: no dashboard on port {port} — start one: tmux new -d -s herd-ui {start}", file=sys.stderr)
+        return 1
+    print(forward_hint(port), file=sys.stderr)
+    return 0
+
+
 def cmd_serve(args) -> int:
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError as e:
+        if e.errno == errno.EADDRINUSE and answers(args.port):
+            print(f"herd dashboard already running: {dashboard_url(args.port)}")
+            print(forward_hint(args.port))
+            return 0
         print(f"herd: cannot listen on 127.0.0.1:{args.port}: {e.strerror}", file=sys.stderr)
         return 1
     server.daemon_threads = True
     server.token = token()
     port = server.server_address[1]
     print(f"herd dashboard: http://127.0.0.1:{port}/?t={server.token}", flush=True)
-    print(f"(remote machine? forward the port first: ssh -L {port}:localhost:{port} <host>, "
-          "or VS Code's Ports tab)  Ctrl-C to stop", flush=True)
+    print(f"{forward_hint(port)}  Ctrl-C to stop", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1432,8 +1957,14 @@ def main(argv: list[str]) -> int:
     p.add_argument("dir", nargs="?", default=".")
     p = sub.add_parser("go", help="attach to a session's tmux pane")
     p.add_argument("name")
-    p = sub.add_parser("serve", help="dashboard on localhost: sessions, their workflows, and a graph")
-    p.add_argument("-p", "--port", type=int, default=7798)
+    p = sub.add_parser("serve", help="dashboard on localhost (already running: prints its URL)")
+    p.add_argument("-p", "--port", type=int, default=PORT)
+    p = sub.add_parser("url", help="print the dashboard's URL (with its token) and how to reach it")
+    p.add_argument("-p", "--port", type=int, help=f"default: the running dashboard's, else {PORT}")
+    p = sub.add_parser("recap", help="what you left open: the sessions you drove since your last workday")
+    p.add_argument("since", nargs="?", help="today, yesterday, friday, 2d, 6h or 2026-10-09 "
+                                            "(default: 00:00 of your last workday; days cut in $HERD_TZ)")
+    p.add_argument("--json", action="store_true")
     if not argv or argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
         argv = ["ls", *argv]
     extra: list[str] = []
@@ -1443,7 +1974,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     args.claude_args = extra
     return {"ls": cmd_ls, "watch": cmd_watch, "new": cmd_new, "go": cmd_go,
-            "serve": cmd_serve}[args.cmd](args)
+            "serve": cmd_serve, "url": cmd_url, "recap": cmd_recap}[args.cmd](args)
 
 
 if __name__ == "__main__":
