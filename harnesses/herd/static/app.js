@@ -653,27 +653,30 @@ function setup() {
   }
   document.addEventListener("keydown", onKey);
   window.addEventListener("hashchange", route);
-  $("view").addEventListener("click", () => setView(!graphShown()));
+  for (const b of document.querySelectorAll(".views .view")) {
+    b.addEventListener("click", () => setView(b.dataset.view === view() ? "" : b.dataset.view));
+  }
   setInterval(header, 1000);
   poll();
   route();
 }
 
-// Two views of the same sessions: the list (default) and #graph. The list keeps polling under the
-// graph, so the header, title, favicon and notifications stay right and switching back is instant.
-const graphShown = () => location.hash === "#graph";
+// Three views: the list (default), #recap (what you left open, ended sessions too) and #graph.
+// The list keeps polling under the others, so the header, title, favicon and notifications stay
+// right and switching back is instant.
+const view = () => (location.hash === "#graph" ? "graph" : /^#recap(=|$)/.test(location.hash) ? "recap" : "");
 function route() {
-  const g = graphShown() && !net.signedOut;
-  $("app").hidden = g;
-  $("graph").hidden = !g;
-  const v = $("view");
-  v.setAttribute("aria-pressed", String(g));
-  v.title = g ? "Back to the list (g)" : "Show as a graph (g)";
-  if (g) graphView.enter();
-  else { graphView.leave(); openFromHash(); }
+  const v = net.signedOut ? "" : view();
+  $("app").hidden = v !== "";
+  $("graph").hidden = v !== "graph";
+  $("recap").hidden = v !== "recap";
+  for (const b of document.querySelectorAll(".views .view")) b.setAttribute("aria-pressed", String(b.dataset.view === v));
+  if (v === "graph") graphView.enter(); else graphView.leave();
+  if (v === "recap") recapView.enter(); else recapView.leave();
+  if (!v) openFromHash();
 }
-function setView(graph) {
-  if (graph) { if (graphShown()) route(); else location.hash = "graph"; }
+function setView(v) {
+  if (v) { if (view() === v) route(); else location.hash = v; }
   else { history.pushState(null, "", location.pathname + location.search); route(); }
 }
 
@@ -872,8 +875,14 @@ function onKey(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const t = e.target;
   if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-  if (e.key === "g" && !net.signedOut) { setView(!graphShown()); e.preventDefault(); return; }
-  if (graphShown()) { graphView.key(e); return; }
+  if ((e.key === "g" || e.key === "r") && !net.signedOut) {
+    const want = e.key === "g" ? "graph" : "recap";
+    setView(view() === want ? "" : want);
+    e.preventDefault();
+    return;
+  }
+  if (view() === "graph") { graphView.key(e); return; }
+  if (view() === "recap") { recapView.key(e); return; }
   const heads = [...document.querySelectorAll("#app .head")];
   const li = document.activeElement && document.activeElement.closest ? document.activeElement.closest("li.row") : null;
   const at = li ? heads.indexOf(li.querySelector(".head")) : -1;
@@ -950,7 +959,9 @@ function bodyNote(text) {
 function signedOut() {
   net.signedOut = true;
   graphView.leave();
+  recapView.leave();
   $("graph").hidden = true;
+  $("recap").hidden = true;
   $("app").hidden = false;
   setVerdict("Signed out", false);
   setCounts("");

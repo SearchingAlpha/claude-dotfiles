@@ -37,6 +37,15 @@ os.execvp("sleep", ["sleep", "600"])
 '''
 
 
+FAKE_RESUME = r'''#!/usr/bin/env python3
+# Records how `herd resume` started claude (argv, folder, environment), then sleeps.
+import json, os, sys
+from pathlib import Path
+Path(os.environ["HERD_TEST_ARGV"]).write_text(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "env": sorted(os.environ)}))
+os.execvp("sleep", ["sleep", "600"])
+'''
+
+
 class Sandbox(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="herd-"))
@@ -789,7 +798,7 @@ class TestGraph(Sandbox):
         self.assertEqual((self.edges[key]["count"], self.edges[key]["summary"]), (2, "two"))
 
 
-class TestServer(Sandbox):
+class ServerBase(Sandbox):
     def setUp(self):
         super().setUp()
         os.environ["XDG_CONFIG_HOME"] = str(self.tmp / "config")
@@ -812,6 +821,9 @@ class TestServer(Sandbox):
         r = conn.getresponse()
         return r.status, dict(r.getheaders()), r.read()
 
+
+
+class TestServer(ServerBase):
     def test_token_is_private_and_stable(self):
         path = self.tmp / "config" / "herd" / "token"
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -976,7 +988,7 @@ class TestAsk(unittest.TestCase):
                  "## Notes\nignore this")
         self.assertEqual(herd.ask_of(reply), "Your turn: 1. Merge #12. 2. Release it.")
         self.assertEqual(herd.ask_of("Done.\n\n## Next steps\n- push\n- tell the team"),
-                         "## Next steps - push - tell the team")
+                         "Next steps - push - tell the team")
         self.assertEqual(herd.ask_of("Two things are still open:\n- push\n- publish"),
                          "Two things are still open: - push - publish")
 
@@ -989,6 +1001,9 @@ class TestAsk(unittest.TestCase):
         self.assertEqual(herd.ask_of("Done.\n\n```python\ndef f():\n\n    pass\n```"), "Done.")
         self.assertEqual(herd.ask_of("**Your turn:**\n```\ndeploy/release.sh\n```\n## Notes\nx"),
                          "Your turn: ``` deploy/release.sh ```")
+
+    def test_only_a_heading_loses_its_hashes(self):
+        self.assertEqual(herd.ask_of("Done.\n\n**#12 is still open:**\n- merge it"), "#12 is still open: - merge it")
 
     def test_a_mention_is_not_a_lead_in(self):
         self.assertEqual(herd.ask_of("I said the next steps are easy, and they were.\n\nAll merged."),
@@ -1064,6 +1079,9 @@ class TestRecap(Sandbox):
         self.assertEqual(self.names(rc), ["api", "old", "aaaa1111"])
         api = rc["sessions"][0]
         self.assertEqual((api["state"], api["live"], api["flags"][0]), ("blocked", True, "permission prompt"))
+        self.assertEqual(api["todo"], ["Answer it in its terminal (waiting for: permission prompt)"])
+        self.assertEqual((api["opener"]["how"], api["opener"]["cmd"]), ("none", ""))
+        self.assertIn("outside tmux", api["opener"]["note"])
         self.assertEqual(rc["sessions"][1]["prompt_count"], 0)
 
     def test_the_calling_session_is_left_out(self):
@@ -1129,6 +1147,9 @@ class TestRecap(Sandbox):
         self.assertEqual(rc["aaaa1111"]["flags"], ["1 dirty", "↑1"])
         self.assertEqual(rc["bbbb2222"]["flags"], ["no remote"])
         self.assertTrue(rc["aaaa1111"]["open"])
+        self.assertEqual(rc["aaaa1111"]["todo"], ["Commit or drop the 1 changed file in local", "Push the 1 commit in local"])
+        self.assertEqual(rc["bbbb2222"]["todo"], ["Give island a remote: this disk holds its only copy"])
+        self.assertEqual(rc["aaaa1111"]["opener"], {"how": "resume", "cmd": "herd resume aaaa1111", "note": ""})
 
     def test_branch_and_repos_as_they_are_now(self):
         repo, plain = self.tmp / "repo", self.tmp / "plain"
@@ -1180,6 +1201,7 @@ class TestRecap(Sandbox):
         rc = self.recap("6h")
         [s] = rc["sessions"]
         self.assertEqual(s["flags"], ["#5 open", "3 dirty", "owner session ended", "PR 7"])
+        self.assertEqual(s["todo"], ["Get #5 merged", "Commit or drop the 3 changed files on fix"])
         self.assertEqual(([t["track"] for t in s["tracks"]], s["git"], s["open"]), (["fix"], [], True))
         self.assertEqual([(t["track"], t["flags"]) for t in rc["loose_ends"]],
                          [("", ["2 commits on main not pushed"]),
@@ -1189,6 +1211,176 @@ class TestRecap(Sandbox):
         r = self.herd("recap", "someday")
         self.assertEqual(r.returncode, 2)
         self.assertIn("cannot read 'someday'", r.stderr)
+
+
+TOPICS = {"since": 1700000000, "intro": "2 open threads.", "suggested": "Merge first.",
+          "topics": [{"title": "Bot release", "state": "open", "summary": "Reviews merged; release left.",
+                      "actions": ["Run `deploy/release.sh`"], "sessions": ["aaaa1111"]},
+                     {"title": "Wording help", "state": "done", "summary": "Delivered.", "actions": [], "sessions": []}]}
+
+
+class TestSummary(Sandbox):
+    def setUp(self):
+        super().setUp()
+        os.environ["XDG_STATE_HOME"] = str(self.tmp / "state")
+        self.path = self.tmp / "state" / "herd" / "recap-summary.json"
+
+    def save(self, text) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(ENTRY), "recap", "--save-summary"], input=text,
+                              capture_output=True, text=True)
+
+    def test_saved_for_the_page(self):
+        r = self.save(json.dumps(TOPICS))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("saved 2 topics", r.stdout)
+        got = json.loads(self.path.read_text())
+        self.assertEqual([t["title"] for t in got["topics"]], ["Bot release", "Wording help"])
+        self.assertEqual((got["since"], got["topics"][1]["state"]), (1700000000.0, "done"))
+        self.assertLess(time.time() - got["generated_at"], 60)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(herd.load_summary()["intro"], "2 open threads.")
+
+    def test_not_a_summary(self):
+        for bad in ("not json", "[]", '{"topics": "x"}', '{"topics": [{"summary": "no title"}]}',
+                    '{"topics": [{"title": "t", "actions": "one string"}]}'):
+            r = self.save(bad)
+            self.assertEqual(r.returncode, 2, bad)
+            self.assertIn("not a recap summary", r.stderr)
+        self.assertFalse(self.path.exists())
+
+    def test_trimmed_and_normalised(self):
+        got = herd.clean_summary({"topics": [{"title": "x" * 500, "state": "weird", "actions": ["", "a"] * 10,
+                                              "sessions": ["s"] * 50}], "since": True})
+        [t] = got["topics"]
+        self.assertEqual((len(t["title"]), t["state"], t["actions"], len(t["sessions"]), got["since"]),
+                         (120, "open", ["a"] * herd.SUMMARY_ACTIONS, herd.SUMMARY_SESSIONS, None))
+
+
+FAKE_SUMMARIZER = """#!%(python)s
+# A stand-in for `claude -p --output-format json`: records how it was called and what it read on
+# stdin, then answers the way Claude does (topics in a code fence), or fails as asked.
+import json, os, sys
+stdin = sys.stdin.read()
+json.dump({"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": stdin}, open(%(argv)r, "w"))
+mode, topics = %(mode)r, %(topics)s
+if mode == "exit":
+    print("auth expired", file=sys.stderr)
+    sys.exit(3)
+text = "Here you go, but no JSON." if mode == "prose" else "```json\\n" + json.dumps(topics) + "\\n```"
+print(json.dumps({"type": "result", "is_error": False, "result": text}))
+"""
+
+
+class TestRecapApi(ServerBase):
+    def setUp(self):
+        super().setUp()
+        os.environ.update(XDG_STATE_HOME=str(self.tmp / "state"), HERD_SHEPHERD="")
+        os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+        herd._summarizer.update(thread=None, proc=None, started_at=0.0, since="", error="")
+        self.argv = self.tmp / "argv.json"
+        write_jsonl(self.claude / "projects" / "-proj" / "aaaa1111.jsonl", typed("one", 900), typed("two", 600),
+                    said("Done.", 500))
+
+    def fake(self, mode="ok"):
+        topics = {**TOPICS, "topics": [{**TOPICS["topics"][0], "sessions": ["aaaa1111", "zzzz9999"]},
+                                       TOPICS["topics"][1]]}
+        path = self.tmp / "fake-claude"
+        path.write_text(FAKE_SUMMARIZER % {"python": sys.executable, "argv": str(self.argv), "mode": mode,
+                                           "topics": json.dumps(topics)})
+        path.chmod(0o755)
+        os.environ["HERD_CLAUDE"] = str(path)
+
+    def post(self, body=b"{}", cookie=None, origin="same", xherd=True):
+        port = self.server.server_address[1]
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        headers = {"Host": f"127.0.0.1:{port}", "Content-Type": "application/json", "Content-Length": str(len(body))}
+        if cookie:
+            headers["Cookie"] = f"herd={cookie}"
+        if origin:
+            headers["Origin"] = f"http://127.0.0.1:{port}" if origin == "same" else origin
+        if xherd:
+            headers["X-Herd"] = "1"
+        conn.request("POST", "/api/recap/summarize", body=body, headers=headers)
+        r = conn.getresponse()
+        return r.status, r.read()
+
+    def wait_done(self):
+        for _ in range(100):
+            if not herd.summarize_status()["running"]:
+                return herd.summarize_status()
+            time.sleep(0.1)
+        self.fail("the summarizer never finished")
+
+    def test_recap_endpoint(self):
+        tok = self.server.token
+        self.assertEqual(self.get("/api/recap")[0], 401)
+        status, headers, body = self.get("/api/recap?since=6h", cookie=tok)
+        self.assertEqual((status, headers["Content-Type"]), (200, "application/json"))
+        d = json.loads(body)
+        self.assertLessEqual({"since", "label", "sessions", "loose_ends", "folded", "summary", "summarizing"}, set(d))
+        self.assertEqual((d["summary"], d["summarizing"]["running"]), (None, False))
+        [s] = d["sessions"]
+        self.assertEqual((s["session_id"], s["ask"], s["opener"]["cmd"]), ("aaaa1111", "Done.", "herd resume aaaa1111"))
+        self.assertNotIn("final_reply", s)
+        self.assertEqual(self.get("/api/recap?since=someday", cookie=tok)[0], 400)
+        status, _, body = self.get("/static/recap.js", cookie=tok)
+        self.assertEqual(status, 200)
+        self.assertIn(b"const recapView", body)
+
+    def test_summarize_only_from_the_page(self):
+        tok = self.server.token
+        self.fake()
+        self.assertEqual(self.post(cookie=tok, xherd=False)[0], 403)
+        self.assertEqual(self.post(cookie=tok, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.post()[0], 401)
+        self.assertEqual(self.post(b'{"since": "someday"}', cookie=tok)[0], 400)
+        self.assertEqual(self.post(b'{"since": 5}', cookie=tok)[0], 400)
+        self.assertFalse(self.argv.exists())    # none of those started anything
+
+    def test_summarize_gives_claude_nothing_but_the_recap(self):
+        tok = self.server.token
+        self.fake()
+        status, body = self.post(b'{}', cookie=tok, origin=None)      # no Origin header at all
+        self.assertEqual(status, 202)
+        self.assertEqual(self.wait_done()["error"], "")
+        call = json.loads(self.argv.read_text())
+        argv = call["argv"]
+        self.assertEqual(argv[:9], ["-p", "--tools", "", "--strict-mcp-config", "--disable-slash-commands",
+                                    "--no-session-persistence", "--settings", '{"disableAllHooks": true}',
+                                    "--output-format"])
+        self.assertEqual(argv[9:11], ["json", "--"])
+        self.assertTrue(argv[11].startswith("The JSON on stdin is the output of `herd recap --json`"))
+        self.assertIn("## Write each topic", argv[11])               # the rules from TOPICS.md
+        self.assertNotIn("--allowedTools", argv)
+        self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(self.tmp / "state" / "herd"))
+        fed = json.loads(call["stdin"])
+        self.assertEqual([s["session_id"] for s in fed["sessions"]], ["aaaa1111"])
+        self.assertEqual(fed["sessions"][0]["final_reply"], "Done.")  # Claude reads the whole reply
+        d = json.loads(self.get("/api/recap", cookie=tok)[2])
+        sm = d["summary"]
+        self.assertEqual([t["title"] for t in sm["topics"]], ["Bot release", "Wording help"])
+        self.assertEqual(sm["topics"][0]["sessions"], ["aaaa1111"])      # an id the recap doesn't hold is dropped
+        self.assertEqual(sm["since"], d["since"])                          # the recap's window, not Claude's
+        self.assertEqual((self.tmp / "state" / "herd" / "summarize.log").stat().st_mode & 0o777, 0o600)
+
+    def test_a_failed_run_says_why(self):
+        for mode, why in (("exit", "Claude exited with 3: auth expired"), ("prose", "Claude's answer wasn't topics")):
+            herd._summarizer.update(thread=None, proc=None, started_at=0.0, error="")
+            self.fake(mode)
+            self.assertEqual(self.post(cookie=self.server.token)[0], 202)
+            self.assertIn(why, self.wait_done()["error"])
+            self.assertIn(why, json.loads(self.get("/api/recap", cookie=self.server.token)[2])["summarizing"]["error"])
+        # A summary saved after the failed run (a /recap in a session) outdates the failure.
+        herd.save_summary(TOPICS)
+        self.assertEqual(herd.summarize_status()["error"], "")
+
+    def test_summary_from_an_answer(self):
+        rc = {"since": 5.0, "sessions": [{"session_id": "s1"}]}
+        got = herd.summary_from('Sure:\n```json\n{"topics": [{"title": "t", "sessions": ["s1", "x"]}], "since": 9}\n```', rc)
+        self.assertEqual((got["since"], got["topics"][0]["sessions"]), (5.0, ["s1"]))
+        for bad in ("no json here", "[1, 2]"):
+            with self.assertRaises(ValueError):
+                herd.summary_from(bad, rc)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux not installed")
@@ -1234,6 +1426,54 @@ class TestTmux(Sandbox):
         missing = self.herd("new", "ok", str(self.tmp / "nope"))
         self.assertEqual(missing.returncode, 1)
         self.assertIn("no such directory", missing.stderr)
+
+    def ended(self, sid, cwd, title="Old work"):
+        project = self.claude / "projects" / herd._project_slug(str(cwd))
+        write_jsonl(project / f"{sid}.jsonl", typed("start", 900, cwd=str(cwd)), typed("more", 600, cwd=str(cwd)),
+                    said("Done for now.", 500, cwd=str(cwd)), {"type": "ai-title", "aiTitle": title})
+
+    def resumed(self) -> list:
+        for _ in range(100):
+            if self.argv_file.exists():
+                return json.loads(self.argv_file.read_text())
+            time.sleep(0.05)
+        self.fail("claude was never started")
+
+    def test_resume_an_ended_session_in_tmux(self):
+        fake = self.tmp / "fake-resume"
+        fake.write_text(FAKE_RESUME)
+        fake.chmod(0o755)
+        os.environ["HERD_CLAUDE"] = str(fake)
+        sid = "abcd1234-0000-4000-8000-000000000000"
+        self.ended(sid, self.work)
+        r = self.herd("resume", "abcd1234", "--detach")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("resumed `Old work` in tmux session `Old-work`", r.stdout)
+        got = self.resumed()
+        self.assertEqual(got["argv"], ["--resume", sid])
+        self.assertEqual(os.path.realpath(got["cwd"]), os.path.realpath(self.work))
+        self.assertNotIn("CLAUDE_CODE_SESSION_ID", got["env"])
+        # By title: the copy already starting in tmux is the one you get, not a second one.
+        r = self.herd("resume", "Old work", "--detach")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("already resuming in tmux session `Old-work`", r.stdout)
+        # Another session of the same name gets its own tmux session.
+        other = "abcd9999-0000-4000-8000-000000000000"
+        self.ended(other, self.work)
+        r = self.herd("resume", "abcd9999", "--detach")
+        self.assertIn("tmux session `Old-work-abcd`", r.stdout)
+
+    def test_resume_refuses_what_it_cant(self):
+        self.assertIn("no session called", self.herd("resume", "ghost").stderr)
+        gone = self.tmp / "gone"
+        self.ended("dead0000-0000-4000-8000-000000000000", gone)
+        r = self.herd("resume", "dead0000", "--detach")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("which is gone", r.stderr)
+        live = self.session("plain", "idle")
+        r = self.herd("resume", live["sessionId"][:8], "--detach")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("outside tmux", r.stderr)
 
     def test_go_outside_tmux(self):
         self.session("plain", "idle")

@@ -56,12 +56,13 @@ code { font-family: var(--mono); font-size: var(--t-meta); }
 .host { margin-left: auto; color: var(--faint); font-size: var(--t-meta); line-height: var(--lh-meta);
   white-space: nowrap; }
 .host.warn { color: var(--warn); }
-/* The view switch: plain text, underlined while the graph is showing; the host follows it. */
-.view { margin-left: auto; color: var(--muted); font-size: var(--t-meta); line-height: var(--lh-meta);
+/* The view switch: plain words, the current one underlined; the host follows it. */
+.views { margin-left: auto; display: flex; gap: var(--s3); }
+.view { color: var(--muted); font-size: var(--t-meta); line-height: var(--lh-meta);
   white-space: nowrap; text-underline-offset: 4px; }
 .view:hover { color: var(--text); }
 .view[aria-pressed="true"] { color: var(--text); text-decoration: underline; text-decoration-thickness: 2px; }
-.view ~ .host { margin-left: 0; }
+.views ~ .host { margin-left: 0; }
 
 /* --- groups ---------------------------------------------------------------------------- */
 main { max-width: 1040px; margin: 0 auto; padding: var(--s5) var(--s5) 0;
@@ -258,6 +259,53 @@ li[aria-expanded="true"] > .gn .chev { transform: rotate(90deg); }
 .gdetail .dl { overflow-wrap: anywhere; }
 .gdetail .dl.first { color: var(--text); }
 
+/* --- recap: one topic per piece of work you left open ------------------------------------ */
+.rbody { display: flex; flex-direction: column; gap: var(--s6); }
+.rtop { display: flex; flex-direction: column; gap: var(--s2); }
+.rline { font-size: var(--t-title); line-height: var(--lh-title); font-weight: 600; }
+.rline .rcount { font-weight: 400; color: var(--muted); }
+.rstate { margin: 0; color: var(--muted); font-size: var(--t-meta); line-height: var(--lh-meta); }
+.rstate .linkbtn:disabled { color: var(--faint); text-decoration: none; cursor: default; }
+.rintro, .rorder { margin: 0; max-width: 80ch; text-wrap: pretty; }
+.rorder { color: var(--muted); }
+.rorder .label { margin-bottom: 2px; }
+.group h2 .hint { margin-left: var(--s3); font-weight: 400; color: var(--faint); font-size: var(--t-meta); }
+.topic { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline;
+  padding: 12px 8px 14px; border-bottom: 1px solid var(--line); }
+.topic:focus-visible { outline-offset: -2px; }
+.topic > .m { grid-column: 1; align-self: start; display: flex; margin-top: 3px; }
+.topic > .tt { grid-column: 2; min-width: 0; font-size: var(--t-title); line-height: var(--lh-title); font-weight: 600;
+  overflow-wrap: anywhere; }
+.topic > .tw { grid-column: 3; white-space: nowrap; color: var(--muted); font-size: var(--t-meta); line-height: var(--lh-meta); }
+.topic > .tsum, .topic > .acts, .topic > .tses { grid-column: 2 / -1; }
+.tsum { margin: 4px 0 0; max-width: 80ch; text-wrap: pretty; overflow-wrap: anywhere; }
+/* herd's own note is the session's last words, not a summary: muted, two lines, the rest in its title. */
+.tsum.mine { color: var(--muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; }
+.acts { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-width: 80ch; }
+.acts li { position: relative; padding-left: 16px; overflow-wrap: anywhere; text-wrap: pretty; }
+.acts li::before { content: ""; position: absolute; left: 2px; top: 9px; width: 7px; border-top: 1.5px solid var(--mark); }
+.acts code, .tsum code, .rintro code, .rorder code { color: var(--text); background: var(--sunk); padding: 0 3px;
+  border-radius: 3px; overflow-wrap: anywhere; }
+.tses { margin: 10px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.ses, .loose { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted);
+  font-size: var(--t-meta); line-height: var(--lh-meta); }
+.ses .sn, .loose .sn { color: var(--text); font-weight: 500; }
+.ses .sst { min-width: 0; }
+.ses .copy, .ses .noattach { margin-left: auto; }
+.loose { padding: 8px; border-bottom: 1px solid var(--line); }
+.dtopic { border-bottom: 1px solid var(--line); }
+.dtopic summary { display: flex; align-items: baseline; gap: 0 var(--s2); padding: 8px; cursor: pointer; list-style: none;
+  min-width: 0; }
+.dtopic summary::-webkit-details-marker { display: none; }
+.dtopic summary:hover { background: var(--sunk); }
+.dtopic summary .mk { align-self: center; flex: none; }
+.dtopic summary .tt { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dtopic summary .dsum { min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dtopic details[open] summary .dsum { white-space: normal; }
+.dtopic .tses { margin: 0 8px 10px 28px; }
+.rfold { margin: 0; color: var(--faint); font-size: var(--t-meta); line-height: var(--lh-meta); max-width: 80ch; }
+
 /* --- footer --------------------------------------------------------------------------- */
 .foot { max-width: 1040px; margin: var(--s6) auto 0; padding: 0 var(--s5) var(--s6); }
 .foot p { margin: 0 0 var(--s1); max-width: 80ch; color: var(--faint); font-size: var(--t-meta); line-height: var(--lh-meta); }
@@ -299,6 +347,11 @@ li[aria-expanded="true"] > .gn .chev { transform: rotate(90deg); }
   .strip { display: none; }
   .detail { padding-left: 28px; }
   .meta .end { margin-left: 0; }
+  .ses .copy, .ses .noattach { margin-left: 0; }
+  .topic { grid-template-columns: 16px minmax(0, 1fr); }
+  .topic > .tw { grid-column: 2; }
+  .dtopic summary .tt { max-width: none; white-space: normal; }
+  .dtopic summary .dsum { display: none; }
   .copy { min-height: 40px; }
   /* Each phase or agent takes two lines: mark, title or label and status word, then the counts or
      doing underneath at the label's indent (26 = 14px mark + 12px gap). Dense flow pulls each
