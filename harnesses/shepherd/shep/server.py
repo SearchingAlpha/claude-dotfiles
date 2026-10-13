@@ -16,11 +16,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import VERSION, board, review, store, tracks
+from . import VERSION, board, graphs, review, store, tracks
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 STATIC_FILES = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
-                "app.css": "text/css; charset=utf-8", "favicon.svg": "image/svg+xml"}
+                "app.css": "text/css; charset=utf-8", "favicon.svg": "image/svg+xml",
+                "graph.js": "text/javascript; charset=utf-8", "graph.css": "text/css; charset=utf-8"}
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 POLL_EVERY = 120        # seconds between review checks per track
 DISCOVER_EVERY = 600
@@ -90,6 +91,11 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/activity":
                 since = int(q.get("since") or store.now() - 7200)
                 return self._json({"events": board.activity(since)})
+            if u.path == "/api/graphs":
+                return self._json(graphs.listing())
+            if u.path == "/api/graph":
+                g = graphs.graph(q.get("id", ""))
+                return self._json(g) if g else self._json({"error": "unknown store"}, 404)
         except Exception as e:
             print(f"{time.strftime('%FT%T')} {u.path}: {type(e).__name__}: {e}", file=sys.stderr)
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)

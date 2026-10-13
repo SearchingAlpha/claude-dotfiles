@@ -67,6 +67,8 @@ The graph is a `Client` region: a click on it hands it the keys, then `↑↓←
 
 The band shows `omnigraph · store · branch · Nn Ee · totals · last op` while a store is present or the feed has ops, with an `open` button. When ops arrive and the pane is not showing, a toast says how many (at most one every 20 s).
 
+The same stores and feed are on shepherd's board in a browser (`/shepherd`, the Graph tab), every root's at once and with the whole width of a screen: [the dashboard](../../harnesses/shepherd/README.md#the-dashboard). It reads the files this mod reads and its `$.store`, and runs nothing.
+
 ## How an op is seen
 
 ```mermaid
