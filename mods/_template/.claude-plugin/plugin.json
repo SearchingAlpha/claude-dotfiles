@@ -1,0 +1,17 @@
+{
+  "name": "mod-template",
+  "version": "0.1.0",
+  "description": "Observe-only starter mod: a /mod-template pane and a one-line band above the prompt. Copy it to start a new mod.",
+  "author": {
+    "name": "SearchingAlpha"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "band": {
+      "type": "boolean",
+      "title": "Band above the prompt",
+      "description": "Draw the one-line band above the prompt. Off leaves the band to other mods; /mod-template still opens the pane.",
+      "default": true
+    }
+  }
+}

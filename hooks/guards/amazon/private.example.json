@@ -1,0 +1,22 @@
+{
+  "_readme": "Shape of skills-amazon/guards/private.json, the values file kept out of git (see README.md). Every value below is a placeholder: copy the file there and fill in your own.",
+  "recipient_guard": {
+    "allow": [
+      "you@example.com",
+      "you@example.org"
+    ]
+  },
+  "confidential": {
+    "literals": [
+      "123456789012",
+      "you@example.com",
+      "team-site.example.net/sites/your-site",
+      "your_schema_name"
+    ],
+    "patterns": [
+      {"name": "work-email", "regex": "[A-Za-z0-9._%+-]+@corp\\.example\\.com"},
+      {"name": "internal-host", "regex": "(?i)\\b[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.internal\\.example\\b"},
+      "\\bTICKET-\\d{6,}\\b"
+    ]
+  }
+}

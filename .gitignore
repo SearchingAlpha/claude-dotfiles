@@ -9,5 +9,10 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 
+# Mods: debug logs and mods/check.sh output, and the declarations the engine
+# lays beside each mod it loads (it writes its own '*' .gitignore there too)
+mods/.debug/
+mods/*/.claude-plugin/types/
+
 # Amazon-internal skills — never commit to public repo
 skills-amazon/

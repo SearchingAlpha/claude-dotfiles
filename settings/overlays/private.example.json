@@ -1,0 +1,9 @@
+{
+  "$comment": "Copy to skills-amazon/settings/private.json (gitignored) and fill in every value; merge.py refuses a value still reading <...>. Pass it with --values. Never commit the copy.",
+  "AWS_ACCOUNT_ID": "<12-digit AWS account id of the sanctioned Bedrock account>",
+  "SHAREPOINT_SITE": "<team SharePoint site, host/sites/name, no scheme>",
+  "REDSHIFT_SCHEMA": "<database.schema the reporting jobs write to>",
+  "VAULT_PUSH_URL": "<the notes vault's exact push URL, as git remote get-url --push --all origin prints it>",
+  "CODE_REVIEW_URL": "<https://code review host and path, up to and including the / before the CR id>",
+  "TICKET_URL": "<https://ticket host and path, up to and including the / before the ticket id>"
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "statusLine": {
+    "type": "command",
+    "command": "\"{{DOTFILES}}/statusline/statusline.sh\" --compact-window 400000",
+    "refreshInterval": 1
+  },
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "\"{{DOTFILES}}/statusline/subagent-statusline.sh\""
+  },
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "xhigh"
+    },
+    "claude-sonnet-5-5": {
+      "effortLevel": "xhigh"
+    }
+  },
+  "effortLevel": "xhigh",
+  "autoCompactWindow": 400000,
+  "promptCacheTtl": "1h",
+  "bashEditDiffEnabled": true,
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
+  }
+}

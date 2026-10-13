@@ -1,0 +1,4 @@
+{
+  "description": "fleet: the band above the prompt and the /fleet pane (tracks, sessions, headless runs). Observe-only; inert where nothing draws (claude -p).",
+  "modules": ["./register.ts"]
+}

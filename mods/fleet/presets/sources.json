@@ -1,0 +1,38 @@
+{
+  "runs": [
+    {
+      "label": "WBR",
+      "glob": "~/.claude/logs/wbr-*.jsonl",
+      "expectEveryHours": 180,
+      "latest": 8,
+      "maxAgeHours": 192,
+      "runningMinutes": 20
+    }
+  ],
+  "lines": [
+    {
+      "label": "WBR",
+      "glob": "~/.claude/logs/wbr-weekly-*.log",
+      "match": "=== Weekly run done|SKIP:",
+      "ok": "done; (?:\\w+_rc=0 ?)+===",
+      "maxAgeHours": 192,
+      "runningMinutes": 30
+    },
+    {
+      "label": "ShortLoad",
+      "glob": "~/shortload-weekly.log",
+      "start": "^=== pull_leads ===$",
+      "match": "^watchdog: (todo en orden|PROBLEMAS)",
+      "ok": "todo en orden",
+      "maxAgeHours": 240,
+      "runningMinutes": 120
+    },
+    {
+      "label": "ShortLoad",
+      "glob": "~/projects/agentic-marketplace/site/ops/weekly-run.txt",
+      "match": "^ts ",
+      "maxAgeHours": 240,
+      "expectEveryHours": 180
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# Operating contract: private values
+
+Confidential values for the `{name}` placeholders in operating-contract.work.md. Gitignored: keep them out of claude-dotfiles and any other GitHub repo.
+
+- report_email: `me@example.com` (standing default recipient for report emails)
+- serving_layer_jobs: the `my_prefix_*` ETLs and the historical `my_history_table` (jobs of the pre-authorized serving-layer workstream)
+- own_schema: `my_cluster.my_schema.my_prefix_*` (the only tables you write to)
+- wbr_library: site `https://example.sharepoint.com/sites/my-team`, library Documents, folder WBR (where WBR reports publish)
+- team_account: `123456789012` (the team AWS account, deployed only through its deploy scripts)

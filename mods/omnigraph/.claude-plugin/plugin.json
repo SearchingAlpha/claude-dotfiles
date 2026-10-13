@@ -1,0 +1,143 @@
+{
+  "name": "omnigraph",
+  "version": "0.1.0",
+  "description": "Live typed-graph pane: a node-link graph, Miller-column browser and op feed that follow the graph commands Claude runs. Observe-only; inert where nothing draws (claude -p).",
+  "author": {
+    "name": "SearchingAlpha"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "store": {
+      "type": "string",
+      "title": "Graph store",
+      "description": "The store directory, relative to the session root (or absolute). A Bash command's own store flag (storeFlag) overrides it for that command.",
+      "default": "graphs/dev.omni"
+    },
+    "storeFlag": {
+      "type": "string",
+      "title": "Store flag",
+      "description": "A command-line flag whose value names the store a matched command writes (--store dir or --store=dir). Empty: always the store option.",
+      "default": "--store"
+    },
+    "storeLabel": {
+      "type": "string",
+      "title": "Store label",
+      "description": "The store's name in the header and the band. Empty: the manifest's name, else the store folder's name.",
+      "default": ""
+    },
+    "cmdRegex": {
+      "type": "string",
+      "title": "Command pattern",
+      "description": "A JavaScript regular expression: a Bash command it matches is a graph op. The first capture group that matched names the op in the feed (else the matched text). Anchor it to the command word, as the default does (a line start or after ; && | ( , past shell keywords, wrappers such as env or timeout, VAR=value, a folder or python3), so an echo, grep or commit message that names the CLI is not an op. Stop every run at a separator ([^\\s;&|()]* and [ \\t]+, never \\S* or \\s*): an unbounded run before a literal rescans the rest of the command after every ; and a long command then stalls every hook. It reads at most 16 KB of a command's head and of its tail.",
+      "default": "(?:^|[\\n;&|(])[ \\t]*(?:(?:do|then|else|if|elif|while|until|\\{|!)[ \\t]+)*(?:(?:timeout|time|env|nohup|exec|command|nice|sudo|xargs)(?:[ \\t]+-[^\\s;&|()]+(?:[ \\t]+[^-\\s;&|()][^\\s;&|()]*)?)*(?:[ \\t]+\\d[\\w.]*)?[ \\t]+|[A-Za-z_]\\w*=[^\\s;&|()]*[ \\t]+|(?:ba|z)?sh[ \\t]+-[a-z]*c[ \\t]+['\"])*(?:(?:[^\\s;&|()]*/)?python3?(?:\\.\\d+)?[ \\t]+(?:-[XW][ \\t]*[^\\s;&|()]+[ \\t]+|-\\w+[ \\t]+)*)?(?:[^\\s;&|()]*/)?(?:omnigraph|omni\\.py)[ \\t]+((?:mutate|query)[ \\t]+[\\w.-]+|init)\\b"
+    },
+    "mcpPrefix": {
+      "type": "string",
+      "title": "MCP tool prefix",
+      "description": "Calls to MCP tools whose name starts with this (e.g. mcp__graph__) are graph ops too, named by the rest of the tool name. Empty: none.",
+      "default": ""
+    },
+    "manifestFile": {
+      "type": "string",
+      "title": "Manifest file",
+      "description": "The manifest's file name inside the store: a JSON object with the version and the counts.",
+      "default": "manifest.json"
+    },
+    "nodesFile": {
+      "type": "string",
+      "title": "Nodes file",
+      "description": "The nodes' file name inside the store: JSON Lines, one node per line.",
+      "default": "nodes.jsonl"
+    },
+    "edgesFile": {
+      "type": "string",
+      "title": "Edges file",
+      "description": "The edges' file name inside the store: JSON Lines, one edge per line.",
+      "default": "edges.jsonl"
+    },
+    "opsFile": {
+      "type": "string",
+      "title": "Ops log",
+      "description": "An optional JSON Lines log inside the store the producer appends one record per op to ({t, kind, op, ok, ms, error}). A new record that started during the call and names an op the command names gives the op its name, latency and error; the tool's own failure always shows as one. Empty: none.",
+      "default": "ops.jsonl"
+    },
+    "versionKey": {
+      "type": "string",
+      "title": "Manifest version key",
+      "description": "The manifest key that holds the build's version or hash.",
+      "default": "version"
+    },
+    "nodeKeys": {
+      "type": "string",
+      "title": "Node record keys",
+      "description": "Three space-separated keys of a node record: its id, its label (type) and its properties object. A '.' for the last reads the properties off the record itself.",
+      "default": "id label props"
+    },
+    "edgeKeys": {
+      "type": "string",
+      "title": "Edge record keys",
+      "description": "Three space-separated keys of an edge record: the source id, the edge type and the target id.",
+      "default": "from type to"
+    },
+    "nameKeys": {
+      "type": "string",
+      "title": "Node name properties",
+      "description": "Space-separated property names tried in order for a node's display name; the id when none is set.",
+      "default": "name title"
+    },
+    "statusKey": {
+      "type": "string",
+      "title": "Status property",
+      "description": "The node property that holds its review status (the Queue tab lists nodes by it).",
+      "default": "status"
+    },
+    "sourceKey": {
+      "type": "string",
+      "title": "Source property",
+      "description": "A node property holding where it came from as path:line (or a list of them), relative to the session root; Browse shows those lines. Empty: none.",
+      "default": "source"
+    },
+    "conflictsKey": {
+      "type": "string",
+      "title": "Open conflicts key",
+      "description": "A manifest key listing ids of open conflicts; the Queue tab shows them first. Empty: none.",
+      "default": "open_conflicts"
+    },
+    "queueStatus": {
+      "type": "string",
+      "title": "Queue statuses",
+      "description": "Space-separated statuses the Queue tab lists for review.",
+      "default": "proposed"
+    },
+    "acceptStatus": {
+      "type": "string",
+      "title": "Accepted status",
+      "description": "The status an exported patch sets.",
+      "default": "accepted"
+    },
+    "owner": {
+      "type": "string",
+      "title": "Patch owner",
+      "description": "The owner an exported patch names. Empty: no owner line.",
+      "default": ""
+    },
+    "patchDir": {
+      "type": "string",
+      "title": "Patch folder",
+      "description": "Where Queue exports write patch files, one folder per store. Empty: omnigraph/patches under the Claude Code configuration folder.",
+      "default": ""
+    },
+    "band": {
+      "type": "boolean",
+      "title": "Band above the prompt",
+      "description": "Draw the one-line omnigraph band above the prompt while a store is present. Off leaves the band to other mods; /omni still opens the pane.",
+      "default": true
+    },
+    "toast": {
+      "type": "boolean",
+      "title": "Toast new ops",
+      "description": "Show a toast when graph ops arrive while the pane is closed (at most one every 20 seconds).",
+      "default": true
+    }
+  }
+}

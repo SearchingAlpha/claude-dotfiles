@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git -* push)",
+      "Bash(git -* push *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push * --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(git push * +*)",
+      "Bash(git push --m*)",
+      "Bash(git push * --m*)",
+      "Bash(git push *'--force*)",
+      "Bash(git push *\"--force*)",
+      "Bash(git push *'-f*)",
+      "Bash(git push *\"-f*)",
+      "Bash(git push *'+*)",
+      "Bash(git push *\"+*)",
+      "Bash(git push *'--m*)",
+      "Bash(git push *\"--m*)",
+      "Bash(git filter-branch *)",
+      "Bash(git filter-repo *)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.aws/cli/cache/**)",
+      "Read(~/.aws/sso/cache/**)",
+      "Read(~/.aws/login/**)",
+      "Read(//**/.env)"
+    ]
+  }
+}

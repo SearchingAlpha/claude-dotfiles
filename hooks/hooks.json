@@ -1,5 +1,5 @@
 {
-  "description": "shepherd: block edits on protected branches and in other sessions' worktrees, warn on files other tracks touch, log edit activity. Inert outside repos enrolled with `shepherd init`.",
+  "description": "shepherd: block edits on protected branches and in other sessions' worktrees, warn on files other tracks touch, log edit activity. Inert outside repos enrolled with `shepherd init`. guards: block secret-shaped literals in file writes and shell commands, redact them from tool output, and (opt-in) batch-commit edits to a notes vault. See hooks/guards/README.md.",
   "hooks": {
     "SessionStart": [
       {
@@ -20,6 +20,12 @@
         "hooks": [
           {"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/harnesses/shepherd/hook.sh\" pre-bash", "timeout": 5}
         ]
+      },
+      {
+        "matcher": "Write|Edit|NotebookEdit|Bash|PowerShell|Monitor",
+        "hooks": [
+          {"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/run.sh\" secret_guard", "timeout": 5}
+        ]
       }
     ],
     "PostToolUse": [
@@ -27,6 +33,33 @@
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/harnesses/shepherd/hook.sh\" post-edit", "timeout": 5, "async": true}
+        ]
+      },
+      {
+        "matcher": "^(Agent|Bash|PowerShell|Read|Grep|WebFetch|WebSearch|TaskOutput|ReadMcpResourceTool|mcp__.*)$",
+        "hooks": [
+          {"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/run.sh\" redact", "timeout": 5}
+        ]
+      },
+      {
+        "matcher": "Write|Edit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/run.sh\" vault_commit", "timeout": 5, "async": true}
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "^(Bash|PowerShell|ReadMcpResourceTool|mcp__.*)$",
+        "hooks": [
+          {"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/run.sh\" redact", "timeout": 5}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/run.sh\" vault_commit", "timeout": 5}
         ]
       }
     ]

@@ -1,0 +1,4 @@
+{
+  "description": "mod-template: the /mod-template pane and the band above the prompt. Observe-only; inert where nothing draws (claude -p).",
+  "modules": ["./register.ts"]
+}
