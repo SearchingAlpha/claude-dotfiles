@@ -6,8 +6,9 @@ Two checks hold it to that code:
 - TestGolden compares herd with runs_golden.json, what the TypeScript said for a few
   hundred generated logs, questions, file names, globs and text logs. No Node needed.
 - TestParity runs the TypeScript itself under Node (22.6 or later, type stripping) on
-  the same inputs and on the fixtures, when it finds it: $HERD_FLEET_TS, else
-  mods/fleet/hooks/fleet.ts. With $HERD_PARITY_LOGS (a folder of real stream-json logs,
+  the same inputs and on the fixtures, when $HERD_FLEET_TS names it (the mod has since
+  become a thin view of herd snapshot, so take it from git as below). With
+  $HERD_PARITY_LOGS (a folder of real stream-json logs,
   ~/.claude/logs say) it also judges every *.jsonl there both ways, and prints only
   file names and verdicts.
 
@@ -714,7 +715,11 @@ process.stdout.write(JSON.stringify(out))
 
 
 def fleet_ts() -> Path:
-    return Path(os.environ.get("HERD_FLEET_TS") or REPO / "mods" / "fleet" / "hooks" / "fleet.ts")
+    named = os.environ.get("HERD_FLEET_TS")
+    if not named:
+        raise unittest.SkipTest("set HERD_FLEET_TS to the fleet mod's TypeScript (git show 3aa5437:mods/fleet/hooks/fleet.ts)"
+                                " to compare herd with it live; TestGolden compares with what it said")
+    return Path(named)
 
 
 def node() -> str:

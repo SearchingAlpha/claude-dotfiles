@@ -1,4 +1,4 @@
-import type { On, RenderSurface } from 'claude-code'
+import type { HerdRun, HerdSession, HerdSnapshot, HerdTrack, On, RenderSurface } from 'claude-code'
 
 export const PLUGIN = 'herd'
 
@@ -9,7 +9,7 @@ export const HOUR = 3_600_000
 
 export const HOME = '/home/user'
 export const LOGS = `${HOME}/logs`
-export const SOURCES = `${HOME}/herd/sources.json`
+export const SOURCES = `${HOME}/.config/herd/sources.json`
 
 /** session.start as an interactive terminal session raises it, and as claude -p does. */
 export const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -24,8 +24,8 @@ export const SELF = '11111111-1111-4111-8111-111111111111'
 /** The id the session goes on under after a /clear. */
 export const AFTER_CLEAR = '22222222-2222-4222-8222-222222222222'
 
-/** A shepherd at a path long enough that a 160-character cut would drop the reason. */
-export const LONG_BIN = `/work/${'deep/'.repeat(30)}bin/shepherd`
+/** A herd at a path long enough that a 160-character cut would drop the reason. */
+export const LONG_BIN = `/work/${'deep/'.repeat(30)}bin/herd`
 
 /** /herd as the person types it at the prompt: the types require origin and presentation. */
 export const RUN = {
@@ -51,221 +51,177 @@ export const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 190, scroll: { offset: 0, bodyRows: 9 }, view: {} },
 } as const
 
-// ------------------------------------------------------------------ shepherd and claude agents, as they print
+// ------------------------------------------------------------------ herd snapshot, as it prints
 
-const s = (ms: number): number => Math.floor(ms / 1000)
+const track = (t: Partial<HerdTrack> & Pick<HerdTrack, 'name' | 'status'>): HerdTrack => ({
+  repo: 'demo-repo',
+  goal: null,
+  sessionId: null,
+  owner: null,
+  isLive: false,
+  reviewId: null,
+  reviewState: null,
+  checks: null,
+  checkedAt: null,
+  reviewUrl: null,
+  lastActivity: null,
+  warnings: [],
+  conflicts: 0,
+  isBlocked: false,
+  waitingFor: null,
+  isStale: false,
+  ...t,
+})
 
-/** `shepherd status --all --json`, trimmed to the fields the mod reads (the real output has more). */
-export const STATUS = {
-  generated_at: s(NOW),
-  repos: [
-    {
-      name: 'demo-repo',
-      primary: '/work/demo-repo',
-      mode: 'observe',
-      tracks: [
-        {
-          name: 'parser-fix',
-          goal: 'Fix the parser',
-          status: 'active',
-          agent: { session_id: 'aaaaaaaa-0000-4000-8000-000000000001', name: 'demo-1', live: true, status: 'busy' },
-          last_activity: s(NOW - 5 * MIN),
-          review: null,
-          warnings: [],
-        },
-        {
-          name: 'docs',
-          goal: 'Write the docs',
-          status: 'review',
-          agent: { session_id: 'aaaaaaaa-0000-4000-8000-000000000002', name: 'demo-2', live: true, status: 'idle' },
-          last_activity: s(NOW - 2 * HOUR),
-          review: { backend: 'github', id: '6', state: 'open', checks: 'passing', checked_at: s(NOW - 3 * HOUR), url: 'https://example.com/pr/6' },
-          warnings: ['3 behind origin/main'],
-        },
-        {
-          name: 'old-idea',
-          goal: 'An idea nobody works on',
-          status: 'active',
-          agent: { session_id: 'aaaaaaaa-0000-4000-8000-000000000003', name: 'demo-3', live: false, status: 'ended' },
-          last_activity: s(NOW - 72 * HOUR),
-          review: null,
-          warnings: ['owner session ended'],
-        },
-      ],
-      overlaps: [],
-    },
-  ],
-  unmanaged: [],
-}
-
-/** `claude agents --json --all`: the owner of parser-fix waits on a permission prompt. */
-export const AGENTS = [
-  {
-    kind: 'interactive',
-    pid: 101,
-    status: 'waiting',
-    waitingFor: 'permission prompt',
-    name: 'demo-1',
+/** shepherd's three tracks as herd joins them: parser-fix's owner waits on a permission prompt. */
+export const TRACKS: HerdTrack[] = [
+  track({
+    name: 'parser-fix',
+    status: 'active',
+    goal: 'Fix the parser',
     sessionId: 'aaaaaaaa-0000-4000-8000-000000000001',
-    cwd: '/work/demo-repo-parser-fix',
-    startedAt: NOW - HOUR,
-  },
-  { kind: 'interactive', pid: 102, status: 'idle', name: 'demo-2', sessionId: 'aaaaaaaa-0000-4000-8000-000000000002', cwd: '/work', startedAt: NOW - 3 * HOUR },
-  { kind: 'interactive', pid: 103, status: 'busy', name: 'me', sessionId: SELF, cwd: '/work', startedAt: NOW - 10 * MIN },
-  { id: 'bg000001', kind: 'background', state: 'done', name: 'nightly report', sessionId: 'bbbbbbbb-0000-4000-8000-000000000001', cwd: '/work', startedAt: NOW - 20 * HOUR },
-  { id: 'bg000002', kind: 'background', state: 'working', pid: 104, status: 'busy', name: 'long refactor', sessionId: 'bbbbbbbb-0000-4000-8000-000000000002', cwd: '/work', startedAt: NOW - 30 * MIN },
+    owner: 'busy',
+    isLive: true,
+    lastActivity: NOW - 5 * MIN,
+    isBlocked: true,
+    waitingFor: 'permission prompt',
+  }),
+  track({
+    name: 'docs',
+    status: 'review',
+    goal: 'Write the docs',
+    sessionId: 'aaaaaaaa-0000-4000-8000-000000000002',
+    owner: 'idle',
+    isLive: true,
+    reviewId: '6',
+    reviewState: 'open',
+    checks: 'passing',
+    checkedAt: NOW - 3 * HOUR,
+    reviewUrl: 'https://example.com/pr/6',
+    lastActivity: NOW - 2 * HOUR,
+    warnings: ['3 behind origin/main'],
+  }),
+  track({
+    name: 'old-idea',
+    status: 'active',
+    goal: 'An idea nobody works on',
+    sessionId: 'aaaaaaaa-0000-4000-8000-000000000003',
+    owner: 'ended',
+    lastActivity: NOW - 72 * HOUR,
+    warnings: ['owner session ended'],
+    isStale: true,
+  }),
 ]
 
+const session = (s: Partial<HerdSession> & Pick<HerdSession, 'sessionId' | 'name' | 'state' | 'status'>): HerdSession => ({
+  shortId: null,
+  kind: 'interactive',
+  waitingFor: null,
+  startedAt: null,
+  cwd: '/work',
+  isLive: true,
+  isBlocked: false,
+  track: null,
+  ...s,
+})
+
+/** herd's live sessions: one waits on you, one background session works. */
+export const SESSIONS: HerdSession[] = [
+  session({
+    sessionId: 'aaaaaaaa-0000-4000-8000-000000000001',
+    name: 'demo-1',
+    state: 'blocked',
+    status: 'waiting',
+    waitingFor: 'permission prompt',
+    startedAt: NOW - HOUR,
+    cwd: '/work/demo-repo-parser-fix',
+    isBlocked: true,
+    track: 'demo-repo/parser-fix',
+  }),
+  session({ sessionId: 'aaaaaaaa-0000-4000-8000-000000000002', name: 'demo-2', state: 'done', status: 'idle', startedAt: NOW - 3 * HOUR, track: 'demo-repo/docs' }),
+  session({ sessionId: SELF, name: 'me', state: 'working', status: 'busy', startedAt: NOW - 10 * MIN }),
+  session({ sessionId: 'bbbbbbbb-0000-4000-8000-000000000001', name: 'nightly report', kind: 'background', state: 'done', status: 'idle', startedAt: NOW - 20 * HOUR }),
+  session({ sessionId: 'bbbbbbbb-0000-4000-8000-000000000002', name: 'long refactor', kind: 'background', state: 'working', status: 'busy', startedAt: NOW - 30 * MIN }),
+]
+
+const facts = (results: number, turns: number, cost: number | null, killed = 0, spawned = killed) => ({
+  results,
+  turns,
+  cost,
+  denied: 0,
+  subagents: { spawned, completed: spawned - killed, failed: 0, killed, stopped: 0, pending: 0 },
+})
+
+const stream = (name: string, ageMs: number, v: Pick<HerdRun, 'verdict' | 'tone' | 'why' | 'detail' | 'facts'>): HerdRun => {
+  const path = `${LOGS}/${name}-2026-10-09.jsonl`
+
+  return { key: `${path}@${NOW - ageMs}`, source: 'Nightly', kind: 'stream', name, path, size: 900, mtimeMs: NOW - ageMs, ...v }
+}
+
+/** A busy night's runs as herd judges them: one finished, one whose subagent was killed, a weekly text log. */
+export const RUNS: HerdRun[] = [
+  stream('nightly-deep-dive', 5 * HOUR, {
+    verdict: 'unfinished',
+    tone: 'fail',
+    why: 'unfinished: 1 subagent killed',
+    detail: 'success · 20 turns · ≈$2.42 · 0 denied · subagents 0/1 done · 1 killed',
+    facts: facts(1, 20, 2.42, 1),
+  }),
+  stream('nightly-report', 6 * HOUR, { verdict: 'ok', tone: 'ok', why: 'ok', detail: 'success · 7 turns · ≈$0.48 · 0 denied', facts: facts(1, 7, 0.48) }),
+  {
+    key: `${LOGS}/weekly-2026-10-05.log@${NOW - 96 * HOUR}`,
+    source: 'Weekly',
+    kind: 'line',
+    name: 'weekly',
+    path: `${LOGS}/weekly-2026-10-05.log`,
+    size: 160,
+    mtimeMs: NOW - 96 * HOUR,
+    verdict: 'ok',
+    tone: 'ok',
+    why: '[09:43] === Weekly run done; a_rc=0 b_rc=0 ===',
+    detail: '',
+    facts: null,
+  },
+]
+
+/** `herd snapshot --json` with no sources file set up. */
+export const SNAPSHOT: HerdSnapshot = {
+  schema: 3,
+  at: NOW,
+  tookMs: 312,
+  host: 'devbox',
+  tracksOn: true,
+  repos: [{ name: 'demo-repo', primary: '/work/demo-repo' }],
+  tracks: TRACKS,
+  tracksError: null,
+  tracksMissing: false,
+  sessionsOn: true,
+  sessions: SESSIONS,
+  sessionsError: null,
+  sessionsMissing: false,
+  runs: [],
+  sources: [],
+  sourcesFile: null,
+  sourcesError: null,
+  acked: [],
+}
+
+/** The same with a sources file and a busy night in it. */
+export const NIGHT: HerdSnapshot = {
+  ...SNAPSHOT,
+  runs: RUNS,
+  sources: [
+    { label: 'Nightly', kind: 'stream', glob: `${LOGS}/nightly-*.jsonl`, error: null, count: 3 },
+    { label: 'Weekly', kind: 'line', glob: `${LOGS}/weekly-*.log`, error: null, count: 1 },
+  ],
+  sourcesFile: SOURCES,
+}
+
+/** The key of the night's failure: what Ack sends to `herd ack`. */
+export const FAILED_KEY = `${LOGS}/nightly-deep-dive-2026-10-09.jsonl@${NOW - 5 * HOUR}`
+
 /** `shepherd inbox --json` run as the person: one handoff addressed to "user". */
-export const INBOX = [{ id: 'a1b2c3', at: s(NOW - 15 * MIN), type: 'handoff', from: 'docs', to: 'user', text: 'Review is open, please look\nmore detail', ref: null }]
-
-// ------------------------------------------------------------------ stream-json logs, as `claude -p --output-format stream-json` writes them
-
-const j = (event: unknown): string => JSON.stringify(event)
-
-const stats = (started: number, completed: number, killedSystem = 0, killedParent = 0, killedUser = 0) => ({
-  spawned: started,
-  requested: { background: started, foreground: 0, unset: 0 },
-  started_in_background: started,
-  max_depth: started > 0 ? 1 : 0,
-  spawned_by_subagents: 0,
-  completed,
-  failed: 0,
-  killed: { parent: killedParent, user: killedUser, system: killedSystem },
-  refused: { depth_limit: 0, concurrency_limit: 0, budget: 0 },
-  by_type: started > 0 ? { 'general-purpose': started } : {},
-})
-
-const result = (fields: Record<string, unknown>): string =>
-  j({
-    type: 'result',
-    subtype: 'success',
-    is_error: false,
-    num_turns: 7,
-    result: 'Report written to output/report.md.',
-    stop_reason: 'end_turn',
-    session_id: 'cccccccc-0000-4000-8000-000000000001',
-    total_cost_usd: 0.48,
-    permission_denials: [],
-    terminal_reason: 'completed',
-    subagent_stats: stats(0, 0),
-    duration_ms: 154_000,
-    ...fields,
-  })
-
-const INIT = j({ type: 'system', subtype: 'init', session_id: 'cccccccc-0000-4000-8000-000000000001', tools: ['Bash', 'Read'] })
-// An assistant line whose text holds the spelling of a result event, escaped as JSON escapes it.
-const ASSISTANT = j({ type: 'assistant', message: { content: [{ type: 'text', text: 'printing {"type":"result"} as text' }] } })
-const TOOL_RESULT = j({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } })
-const BG_START = j({
-  type: 'system',
-  subtype: 'task_started',
-  task_id: 'a155',
-  description: 'Deep dive',
-  subagent_type: 'general-purpose',
-  is_backgrounded: true,
-  task_type: 'local_agent',
-})
-const BASH_START = j({ type: 'system', subtype: 'task_started', task_id: 'b1', is_backgrounded: false, task_type: 'local_bash' })
-const BASH_DONE = j({ type: 'system', subtype: 'task_notification', task_id: 'b1', status: 'completed' })
-
-const BG_START_2 = BG_START.replace('"a155"', '"a156"').replace('Deep dive', 'Duplicate deep dive')
-
-/** A run that did its work and said so. */
-export const LOG_OK = [INIT, ASSISTANT, TOOL_RESULT, BASH_START, BASH_DONE, result({})].join('\n') + '\n'
-
-/**
- * rc=0 and subtype success, but its background subagent never finished: `-p`
- * stopped waiting after ten minutes and killed it, then wrote the result. The
- * order is a real log's: stderr folded in, the kill, then the result.
- */
-export const LOG_UNFINISHED =
-  [
-    INIT,
-    ASSISTANT,
-    BG_START,
-    'Background tasks still running after 600s; terminating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.',
-    j({ type: 'system', subtype: 'task_updated', task_id: 'a155', patch: { status: 'killed', end_time: NOW } }),
-    j({ type: 'system', subtype: 'task_notification', task_id: 'a155', status: 'stopped' }),
-    result({ num_turns: 20, total_cost_usd: 2.42, result: 'The builder works.\nNow waiting for the deep-dive agent to finish.', subagent_stats: stats(1, 0, 1) }),
-  ].join('\n') + '\n'
-
-/**
- * Two background subagents; the model stopped the duplicate itself with
- * TaskStop (killed.parent) and the other finished: the run finished its work.
- */
-export const LOG_STOPPED_BY_MODEL =
-  [
-    INIT,
-    BG_START,
-    BG_START_2,
-    j({ type: 'system', subtype: 'task_updated', task_id: 'a156', patch: { status: 'killed', end_time: NOW } }),
-    j({ type: 'system', subtype: 'task_notification', task_id: 'a156', status: 'stopped' }),
-    j({ type: 'system', subtype: 'task_notification', task_id: 'a155', status: 'completed' }),
-    result({ num_turns: 9, result: 'Report written; stopped the duplicate deep dive.', subagent_stats: stats(2, 1, 0, 1) }),
-  ].join('\n') + '\n'
-
-/** The same run, but the stop was not the model's (killed.user): something stopped the subagent from outside. */
-export const LOG_STOPPED_BY_OTHER = LOG_STOPPED_BY_MODEL.replace('"parent":1,"user":0', '"parent":0,"user":1')
-
-/** The main turn answered while its background subagent still runs: `-p` is still waiting on it. */
-export const LOG_WAITING =
-  [INIT, BG_START, result({ result: 'Started the deep dive; waiting for it.', subagent_stats: stats(1, 0) })].join('\n') + '\n'
-
-/** A run the permission system refused a call in. */
-export const LOG_DENIED =
-  [
-    INIT,
-    j({ type: 'system', subtype: 'permission_denied', tool_name: 'Bash', tool_use_id: 'toolu_01' }),
-    result({ permission_denials: [{ tool_name: 'Bash', tool_use_id: 'toolu_01', tool_input: { command: 'cp a b' } }] }),
-  ].join('\n') + '\n'
-
-/** A run that stopped mid-turn: no result event at all. */
-export const LOG_KILLED = [INIT, ASSISTANT, TOOL_RESULT].join('\n') + '\n'
-
-/** A run that hit its turn limit. */
-export const LOG_FAILED =
-  [INIT, result({ subtype: 'error_max_turns', is_error: true, terminal_reason: 'max_turns', errors: ['Reached maximum number of turns (40)'] })].join('\n') + '\n'
-
-/** A run whose last word was a question nobody was there to answer. */
-export const LOG_ASKED =
-  [INIT, result({ result: 'Two queries returned no rows.\n\n1. Publish anyway\n2. Wait for the data\n\nWhich do you want?' })].join('\n') + '\n'
-
-/** A run that answered its background subagent in a second result: finished, two results, one denial over both. */
-export const LOG_TWO_RESULTS =
-  [
-    INIT,
-    BG_START,
-    result({ num_turns: 24, total_cost_usd: 4.41, result: 'Waiting for the deep-dive agent.', permission_denials: [{ tool_name: 'Skill', tool_use_id: 'toolu_02', tool_input: {} }], subagent_stats: stats(1, 1) }),
-    j({ type: 'system', subtype: 'task_notification', task_id: 'a155', status: 'completed' }),
-    result({ num_turns: 8, total_cost_usd: 4.41, origin: { kind: 'task-notification' }, subagent_stats: stats(1, 1) }),
-  ].join('\n') + '\n'
-
-/** A build that writes no subagent_stats: the task events say the background subagent never completed. */
-export const LOG_NO_STATS = [INIT, BG_START, result({ subagent_stats: undefined, result: 'Started the deep dive.' })].join('\n') + '\n'
-
-/** No subagent_stats and no task events: only the result's words say it stopped waiting. */
-export const LOG_SAYS_WAITING = [INIT, result({ subagent_stats: undefined, result: 'Built the page.\nNow waiting for the review agent to finish.' })].join('\n') + '\n'
-
-/** LOG_OK as a JSON writer with spaces (Python's json.dumps, an SDK logger) writes it. */
-export const LOG_OK_SPACED = LOG_OK.split('\n')
-  .map(l => l.replace(/":/g, '": ').replace(/,"/g, ', "'))
-  .join('\n')
-
-/** One foreground subagent completed and one background subagent failed: the run still says success. */
-export const LOG_SUBAGENT_FAILED =
-  [
-    INIT,
-    BG_START,
-    j({ type: 'system', subtype: 'task_notification', task_id: 'a155', status: 'failed' }),
-    result({
-      result: 'Report written; the deep dive could not finish.',
-      subagent_stats: { ...stats(1, 1), spawned: 2, requested: { background: 1, foreground: 1, unset: 0 }, failed: 1 },
-    }),
-  ].join('\n') + '\n'
-
-/** A run whose final report is longer than `len` characters: its result line alone outgrows a short tail. */
-export const logWithLongResult = (len: number): string => [INIT, result({ result: `Report:\n${'x'.repeat(len)}\nDone.` })].join('\n') + '\n'
+export const INBOX = [{ id: 'a1b2c3', at: Math.floor((NOW - 15 * MIN) / 1000), type: 'handoff', from: 'docs', to: 'user', text: 'Review is open, please look\nmore detail', ref: null }]
 
 /** How a peer's message reaches `session.receive`: the engine's envelope around the sender's text. */
 export const PEER_ENVELOPE =
@@ -275,28 +231,7 @@ export const PEER_ENVELOPE =
 export const HAND_BACK =
   'Another Claude session sent a message: <agent-message from="a0fc1234abcd5678">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to.\n</agent-message>'
 
-/**
- * An append-only log three cron jobs write to: the weekly run (its start, its
- * steps, its watchdog verdict), the noon watchdog, and a Friday check that crashed.
- */
-export const SHARED_LOG_OK =
-  '=== pull_leads ===\nok\n=== stage_gate ===\nok\n=== watchdog ===\nwatchdog: todo en orden\nwatchdog: todo en orden\n=== structure_check ===\nTraceback (most recent call last):\nKeyError: x\n'
-/** The next week's run started and has not reached its watchdog yet. */
-export const SHARED_LOG_NEXT_RUN = `${SHARED_LOG_OK}=== pull_leads ===\nok\n=== build_deploy ===\n`
-
-/** A text log of a weekly cron wrapper, judged by its last matching line. */
-export const WEEKLY_OK = '[09:30] === Weekly run start ===\n[09:43] --- report: claude -p exit rc=0 after 823s ---\n[09:43] === Weekly run done; a_rc=0 b_rc=0 ===\n'
-export const WEEKLY_SKIP = '[09:30] === Weekly run start ===\n[09:30] SKIP: login stale, not running\n'
-
-/** A sources file naming one scheduled stream source and one text log. */
-export const SOURCES_FILE = {
-  runs: [{ label: 'Nightly', glob: `${LOGS}/nightly-*.jsonl`, expectEveryHours: 30 }],
-  lines: [{ label: 'Weekly', glob: `${LOGS}/weekly-*.log`, match: '=== Weekly run done|SKIP:', ok: 'done; (?:\\w+_rc=0 ?)+===' }],
-}
-
 // ------------------------------------------------------------------ the stub world
-
-export type File = { text: string; mtimeMs: number; size?: number }
 
 /** What the mod asked of the engine, recorded by the stubs below; change these fields in a test, not the stubs. */
 export type World = {
@@ -316,22 +251,23 @@ export type World = {
   /** What `$.session.id()` answers; /clear moves it on. */
   selfId: string
   /**
-   * What `shepherd status` prints. 'missing': a shepherd that is not installed;
-   * 'missing-long': the same at a long absolute path, as the engine words it;
-   * 'broken': one that exits 1; 'broken-fnf': one that exits 1 saying a file is missing.
+   * What `herd snapshot` prints, stamped with the clock's time. 'missing': a
+   * herd that is not installed; 'missing-long': the same at a long absolute
+   * path, as the engine words it; 'broken': one that exits 1.
    */
-  status: unknown
-  agents: unknown
+  snapshot: unknown
+  /** How many times `herd snapshot` answered. */
+  reads: number
+  /** The keys of each `herd ack`; a successful one also lands in the snapshot's `acked`, as herd keeps it. */
+  acks: string[][]
+  /** What `herd ack` answers: null acks, a string fails with it on stderr. */
+  ackDeny: string | null
   inbox: unknown[]
-  /** Files by absolute path; a directory lists the files under it. */
-  files: Map<string, File>
   isPlaced: boolean
   isDelivered: boolean
-  /** While set, `claude agents` answers only once it resolves: a refresh held mid-read. */
+  /** While set, `herd snapshot` answers only once it resolves: a refresh held mid-read. */
   gate: Promise<void> | null
 }
-
-const dirOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/'
 
 /**
  * Seats the stubs that answer in Claude Code's place. Every one is registered
@@ -352,10 +288,11 @@ export function worldOf(on: On, surfaces: readonly RenderSurface[] = ['terminal'
     storeDeny: null,
     commandDeny: null,
     selfId: SELF,
-    status: STATUS,
-    agents: AGENTS,
+    snapshot: SNAPSHOT,
+    reads: 0,
+    acks: [],
+    ackDeny: null,
     inbox: INBOX,
-    files: new Map(),
     isPlaced: true,
     isDelivered: true,
     gate: null,
@@ -413,54 +350,48 @@ export function worldOf(on: On, surfaces: readonly RenderSurface[] = ['terminal'
 
     return { value: undefined }
   })
-  on('fs.list', ($, e) => {
-    const inside = [...world.files.entries()].filter(([path]) => dirOf(path) === e.path)
-
-    if (inside.length === 0 && ![...world.files.keys()].some(path => path.startsWith(`${e.path}/`))) {
-      return { deny: `ENOENT: no such file or directory, scandir '${e.path}'` }
-    }
-
-    return {
-      value: inside.map(([path, f]) => ({ name: path.slice(path.lastIndexOf('/') + 1), kind: 'file' as const, size: f.size ?? f.text.length, mtimeMs: f.mtimeMs, isLink: false })),
-    }
-  })
-  on('fs.read', ($, e) => {
-    const f = world.files.get(e.path)
-
-    return f === undefined ? { deny: `ENOENT: no such file or directory, open '${e.path}'` } : { value: f.text }
-  })
   on('process.run', async ($, e) => {
-    if (world.gate !== null && e.argv[1] === 'agents') {
+    if (world.gate !== null && e.argv[1] === 'snapshot') {
       await world.gate
     }
     world.processes.push({ argv: e.argv, ...(e.init?.cwd !== undefined && { cwd: e.init.cwd }), ...(e.init?.env !== undefined && { env: e.init.env }) })
 
     const [bin, verb] = e.argv
 
-    if (bin === 'tail') {
-      const f = world.files.get(e.argv[3] ?? '')
-
-      return f === undefined ? out('', 1, 'tail: no such file') : out(f.text.slice(-Number(e.argv[2])))
-    }
-    if (verb === 'agents') {
-      return out(JSON.stringify(world.agents))
-    }
-    if (world.status === 'missing') {
-      return { deny: `spawn ${bin} ENOENT` }
-    }
-    if (world.status === 'missing-long') {
-      return { deny: `${LONG_BIN} failed to start: ENOENT: no such file or directory, posix_spawn '${LONG_BIN}'` }
-    }
-    if (world.status === 'broken') {
-      return out('', 1, 'shepherd: state written by a newer shepherd')
-    }
-    if (world.status === 'broken-fnf') {
-      return out('', 1, "FileNotFoundError: [Errno 2] No such file or directory: '/home/u/.claude/shepherd/repos.json'")
+    if (verb === 'snapshot' || verb === 'ack') {
+      if (world.snapshot === 'missing') {
+        return { deny: `spawn ${bin} ENOENT` }
+      }
+      if (world.snapshot === 'missing-long') {
+        return { deny: `${LONG_BIN} failed to start: ENOENT: no such file or directory, posix_spawn '${LONG_BIN}'` }
+      }
+      if (world.snapshot === 'broken') {
+        return out('', 1, 'Traceback (most recent call last): herd crashed')
+      }
     }
 
     switch (verb) {
-      case 'status':
-        return out(JSON.stringify(world.status))
+      case 'snapshot': {
+        const s = world.snapshot as Record<string, unknown>
+
+        world.reads += 1
+
+        // A later read is a later `at`, as herd stamps it (a stub cannot read the mock clock).
+        return out(JSON.stringify(typeof s === 'object' && s !== null && 'at' in s ? { ...s, at: NOW + world.reads } : s))
+      }
+      case 'ack': {
+        if (world.ackDeny !== null) {
+          return out('', 1, world.ackDeny)
+        }
+
+        const keys = e.argv.slice(2)
+        const s = world.snapshot as HerdSnapshot
+
+        world.acks.push(keys)
+        world.snapshot = { ...s, acked: [...new Set([...s.acked, ...keys.filter(k => s.runs.some(r => r.key === k))])] }
+
+        return out(`acked ${keys.length} run${keys.length === 1 ? '' : 's'}\n`)
+      }
       case 'inbox':
         return out(JSON.stringify(world.inbox))
       case 'accept':
@@ -491,11 +422,7 @@ export function worldOf(on: On, surfaces: readonly RenderSurface[] = ['terminal'
   return world
 }
 
-/** Puts the stream logs and the sources file of a busy night in the world. */
+/** A sources file set up, and a busy night in it. */
 export function nightOf(world: World): void {
-  world.files.set(SOURCES, { text: JSON.stringify(SOURCES_FILE), mtimeMs: NOW - 48 * HOUR })
-  world.files.set(`${LOGS}/nightly-report-2026-10-09.jsonl`, { text: LOG_OK, mtimeMs: NOW - 6 * HOUR })
-  world.files.set(`${LOGS}/nightly-report-2026-10-08.jsonl`, { text: LOG_FAILED, mtimeMs: NOW - 30 * HOUR })
-  world.files.set(`${LOGS}/nightly-deep-dive-2026-10-09.jsonl`, { text: LOG_UNFINISHED, mtimeMs: NOW - 5 * HOUR })
-  world.files.set(`${LOGS}/weekly-2026-10-05.log`, { text: WEEKLY_OK, mtimeMs: NOW - 4 * 24 * HOUR })
+  world.snapshot = NIGHT
 }

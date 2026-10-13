@@ -1,67 +1,25 @@
-// The herd's reading half: one refresh over a narrow Reader that register.ts
-// binds from `$` (and a test or a smoke script binds from fixtures). Every
-// source is read on its own and fails on its own: a missing shepherd, a
-// sources file that does not parse or a log that cannot be read is named in
-// the snapshot, and the rest still shows.
-import type {
-  HerdInboxEntry,
-  HerdRepo,
-  HerdRun,
-  HerdSession,
-  HerdSnapshot,
-  HerdSource,
-  HerdTrack,
-  FsEntry,
-  ProcessRunInit,
-  ProcessRunResult,
-} from 'claude-code'
+// The herd mod's reading half: one refresh is one `herd snapshot --json`, over
+// a narrow Reader that register.ts binds from `$` (and a test binds from
+// fixtures). herd reads shepherd, the sessions and the run logs and judges
+// them; each part of what it prints carries its own error. The presses run
+// here too: Ack through `herd ack`, Inbox, Accept and the board through shepherd.
+import type { HerdInboxEntry, HerdRepo, HerdSnapshot, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import {
-  SCHEMA,
-  configKeyOf,
-  expandHome,
-  factsOfStream,
-  firstLineOf,
-  globParts,
-  joined,
-  lastMatchOf,
-  lateRun,
-  pickLogs,
-  runNameOf,
-  sessionsOf,
-  sourcesOf,
-  tracksOf,
-  verdictOfLine,
-  verdictOfStream,
-} from './herd'
-import type { Config, LineFind, LineSource, RunSource, StreamFacts, Verdict } from './herd'
+import { expandHome, firstLineOf, notSnapshotWhy, snapshotOf } from './herd'
+import type { Config } from './herd'
 
-/** What a refresh needs of the engine: the clock, processes, and reads. */
+/** What a refresh and the presses need of the engine: the clock and processes. */
 export type Reader = {
   now: () => Promise<number>
   run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
-  list: (path: string) => Promise<readonly FsEntry[]>
-  read: (path: string) => Promise<string>
 }
 
-/** `$.process.run` per call: shepherd and claude agents answer in well under a second. */
+/** `herd snapshot` waits up to 20 s on shepherd itself; the rest answer in well under a second. */
+const SNAPSHOT_TIMEOUT_MS = 30_000
 const RUN_TIMEOUT_MS = 15_000
-/** Below `$.fs.read`'s 4 MiB limit, with room; a bigger log is read from its tail. */
-const WHOLE_READ_BYTES = 3_500_000
-const TAIL_BYTES = 1_048_576
-/** The second, longer tail when the first held no result event; under `$.process.run`'s 4 MiB of stdout. */
-const LONG_TAIL_BYTES = 3_500_000
-/** Parsed logs kept between refreshes, by path, size and mtime. */
-const CACHE_MAX = 400
 
 /** Shepherd's inbox and accept act as the person, never as this session's track. */
 const AS_THE_PERSON = { CLAUDE_CODE_SESSION_ID: '' }
-
-/**
- * The timer's `shepherd status` runs `git status` in every track worktree: no
- * optional index lock, so a refresh never makes the person's `git add` fail.
- */
-const NO_OPTIONAL_LOCKS = { GIT_OPTIONAL_LOCKS: '0' }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
@@ -73,18 +31,12 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export const errorText = (error: unknown): string =>
   firstLineOf(messageOf(error).replace(/^[\w@.-]+: \$\.[\w.]+(?:\([^)\n]*\))?:?\s*/, ''), 160)
 
-/** A command's failure, tagged with whether it could not start at all (not installed here). */
-type RunFailure = Error & { isMissing: boolean }
-
-const failureOf = (message: string, isMissing: boolean): RunFailure => Object.assign(new Error(message), { isMissing })
-
 /**
  * Runs a command that prints JSON and parses it; throws with the command's own
- * words on failure. Only a command that could not start, ENOENT, is missing: a
- * non-zero exit is the tool's own failure, whatever its stderr says.
+ * words on failure. A command that cannot start (ENOENT) says how to get one.
  */
 async function runJson(r: Reader, argv: readonly string[], init: ProcessRunInit = {}): Promise<unknown> {
-  // The command's name, not its path: `shepherd status`.
+  // The command's name, not its path: `herd snapshot`.
   const what = [(argv[0] ?? '').replace(/^.*\//, ''), ...argv.slice(1, 2)].join(' ')
   let out: ProcessRunResult
 
@@ -92,283 +44,47 @@ async function runJson(r: Reader, argv: readonly string[], init: ProcessRunInit 
     out = await r.run(argv, { timeoutMs: RUN_TIMEOUT_MS, ...init })
   } catch (error) {
     // Rejects only when it cannot start or outlives its timeout; classify the whole message, cut it after.
-    throw failureOf(`${what}: ${errorText(error)}`, /\bENOENT\b/.test(messageOf(error)))
+    const missing = /\bENOENT\b/.test(messageOf(error)) ? ' (not installed here? install.sh links it, or set its _bin option)' : ''
+
+    throw new Error(`${what}: ${errorText(error)}${missing}`)
   }
 
   if (out.exitCode !== 0) {
-    throw failureOf(`${what} exited ${out.exitCode}: ${firstLineOf(out.stderr || out.stdout, 140) || 'no output'}`, false)
+    throw new Error(`${what} exited ${out.exitCode}: ${firstLineOf(out.stderr || out.stdout, 140) || 'no output'}`)
   }
 
   try {
     return JSON.parse(out.stdout)
   } catch {
-    throw failureOf(`${what} printed no JSON: ${firstLineOf(out.stdout, 100) || 'nothing'}`, false)
+    throw new Error(`${what} printed no JSON: ${firstLineOf(out.stdout, 100) || 'nothing'}`)
   }
 }
 
-type Part<T> = { value: T; error: string | null; isMissing: boolean }
+/** One refresh: what `herd snapshot` prints, checked. Throws when herd cannot run or prints another shape. */
+export async function readSnapshot(r: Reader, cfg: Config, home: string | null): Promise<HerdSnapshot> {
+  const argv = [expandHome(cfg.herd, home), 'snapshot', '--json', '--stale-hours', String(cfg.staleHours)]
+  const value = await runJson(r, argv, { timeoutMs: SNAPSHOT_TIMEOUT_MS })
+  const snapshot = snapshotOf(value)
 
-async function partOf<T>(isOn: boolean, empty: T, read: () => Promise<T>): Promise<Part<T>> {
-  if (!isOn) {
-    return { value: empty, error: null, isMissing: false }
+  if (snapshot === null) {
+    throw new Error(`herd snapshot printed ${notSnapshotWhy(value)}`)
   }
 
-  try {
-    return { value: await read(), error: null, isMissing: false }
-  } catch (error) {
-    const isMissing = error instanceof Error && (error as Partial<RunFailure>).isMissing === true
-
-    return { value: empty, error: errorText(error), isMissing }
-  }
+  return snapshot
 }
 
-/** What one version of a log said: a stream log's facts, or a text log's verdict line. */
-type Parsed = { kind: 'stream'; facts: StreamFacts } | { kind: 'line'; pattern: string; found: LineFind }
-
-/** The cache of parsed logs a register keeps across refreshes, by path, size and mtime. */
-export type FactsCache = Map<string, Parsed>
-
-const remember = (cache: FactsCache, key: string, parsed: Parsed): void => {
-  cache.set(key, parsed)
-
-  while (cache.size > CACHE_MAX) {
-    const [oldest] = cache.keys()
-
-    if (oldest === undefined) {
-      break
-    }
-    cache.delete(oldest)
-  }
-}
-
-/** A log's last `bytes`, read with `tail -c`. */
-async function tailOf(r: Reader, path: string, bytes: number): Promise<string> {
-  const out = await r.run(['tail', '-c', String(bytes), path], { timeoutMs: RUN_TIMEOUT_MS })
+/** `herd ack <key>…`: marks run failures as seen for every session and the board. Resolves what herd printed. */
+export async function ackRuns(r: Reader, cfg: Config, home: string | null, keys: readonly string[]): Promise<string> {
+  const out = await r.run([expandHome(cfg.herd, home), 'ack', ...keys], { timeoutMs: RUN_TIMEOUT_MS })
 
   if (out.exitCode !== 0) {
-    throw new Error(`tail exited ${out.exitCode}: ${firstLineOf(out.stderr, 100)}`)
+    throw new Error(firstLineOf(out.stderr || out.stdout, 160) || `herd ack exited ${out.exitCode}`)
   }
 
-  return out.stdout
+  return firstLineOf(out.stdout, 160) || `acked ${keys.length}`
 }
 
-/** A log's text: whole when one read can take it, else its last MiB (`isPartial`). */
-async function textOf(r: Reader, path: string, size: number): Promise<{ text: string; isPartial: boolean }> {
-  return size <= WHOLE_READ_BYTES ? { text: await r.read(path), isPartial: false } : { text: await tailOf(r, path, TAIL_BYTES), isPartial: true }
-}
-
-/** Reads one stream log, parsed once per version. */
-async function factsOf(r: Reader, path: string, size: number, mtimeMs: number, cache: FactsCache): Promise<StreamFacts> {
-  const key = `${path}:${size}:${mtimeMs}`
-  const hit = cache.get(key)
-
-  if (hit?.kind === 'stream') {
-    return hit.facts
-  }
-
-  const { text, isPartial } = await textOf(r, path, size)
-  let facts = factsOfStream(text, isPartial)
-
-  // A final result longer than the tail starts before it: read a longer one before judging.
-  if (isPartial && facts.last === null) {
-    facts = factsOfStream(await tailOf(r, path, LONG_TAIL_BYTES), true)
-  }
-
-  remember(cache, key, { kind: 'stream', facts })
-
-  return facts
-}
-
-/** A text log's verdict line, found once per version of the log and patterns. */
-async function lineOf(r: Reader, path: string, size: number, mtimeMs: number, s: LineSource, cache: FactsCache): Promise<LineFind> {
-  const key = `${path}:${size}:${mtimeMs}`
-  const pattern = `${s.match.source}\n${s.start?.source ?? ''}`
-  const hit = cache.get(key)
-
-  if (hit?.kind === 'line' && hit.pattern === pattern) {
-    return hit.found
-  }
-
-  // The verdict line is near the end: a log over the read limit is judged by its tail.
-  const found = lastMatchOf((await textOf(r, path, size)).text, s.match, s.start)
-
-  remember(cache, key, { kind: 'line', pattern, found })
-
-  return found
-}
-
-/** The files one glob names, listed once. */
-async function filesOf(r: Reader, glob: string, home: string | null): Promise<{ dir: string; files: FsEntry[] }> {
-  const { dir, pattern } = globParts(glob, home)
-  const entries = await r.list(dir)
-
-  return { dir, files: entries.filter(e => e.kind === 'file' && pattern.test(e.name)) }
-}
-
-const runOf = (source: string, kind: 'stream' | 'line', path: string, f: FsEntry, v: Verdict): HerdRun => ({
-  key: `${path}@${f.mtimeMs}`,
-  source,
-  kind,
-  name: runNameOf(f.name),
-  path,
-  size: f.size,
-  mtimeMs: f.mtimeMs,
-  ...v,
-})
-
-async function readStreamSource(r: Reader, s: RunSource, home: string | null, nowMs: number, cache: FactsCache): Promise<{ runs: HerdRun[]; source: HerdSource }> {
-  const source: HerdSource = { label: s.label, kind: 'stream', glob: s.glob, error: null, count: 0 }
-  const runs: HerdRun[] = []
-
-  try {
-    const { dir, files } = await filesOf(r, s.glob, home)
-    const picked = pickLogs(files, /./, nowMs, s.maxAgeHours, s.latest)
-
-    for (const f of picked) {
-      const path = `${dir}/${f.name}`
-
-      try {
-        const facts = await factsOf(r, path, f.size, f.mtimeMs, cache)
-
-        runs.push(runOf(s.label, 'stream', path, f, verdictOfStream(facts, f.mtimeMs, nowMs, s.runningMinutes)))
-      } catch (error) {
-        runs.push(runOf(s.label, 'stream', path, f, { verdict: 'unreadable', tone: 'warn', why: `unreadable: ${errorText(error)}`, detail: '' }))
-      }
-    }
-
-    source.count = files.length
-
-    const late = lateRun(s.label, s.glob, 'stream', files.length === 0 ? null : Math.max(...files.map(f => f.mtimeMs)), nowMs, s.expectEveryHours)
-
-    if (late !== null) {
-      runs.push(late)
-    }
-  } catch (error) {
-    source.error = errorText(error)
-  }
-
-  return { runs, source }
-}
-
-async function readLineSource(r: Reader, s: LineSource, home: string | null, nowMs: number, cache: FactsCache): Promise<{ runs: HerdRun[]; source: HerdSource }> {
-  const source: HerdSource = { label: s.label, kind: 'line', glob: s.glob, error: null, count: 0 }
-  const runs: HerdRun[] = []
-
-  try {
-    const { dir, files } = await filesOf(r, s.glob, home)
-
-    for (const f of pickLogs(files, /./, nowMs, s.maxAgeHours, s.latest)) {
-      const path = `${dir}/${f.name}`
-
-      try {
-        const found = await lineOf(r, path, f.size, f.mtimeMs, s, cache)
-
-        runs.push(runOf(s.label, 'line', path, f, verdictOfLine(found, s.match, s.start, s.ok, f.mtimeMs, nowMs, s.runningMinutes)))
-      } catch (error) {
-        runs.push(runOf(s.label, 'line', path, f, { verdict: 'unreadable', tone: 'warn', why: `unreadable: ${errorText(error)}`, detail: '' }))
-      }
-    }
-
-    source.count = files.length
-
-    const late = lateRun(s.label, s.glob, 'line', files.length === 0 ? null : Math.max(...files.map(f => f.mtimeMs)), nowMs, s.expectEveryHours)
-
-    if (late !== null) {
-      runs.push(late)
-    }
-  } catch (error) {
-    source.error = errorText(error)
-  }
-
-  return { runs, source }
-}
-
-/** Every run source the options and the sources file name, read and judged. */
-export async function readRuns(
-  r: Reader,
-  cfg: Config,
-  home: string | null,
-  nowMs: number,
-  cache: FactsCache,
-): Promise<{ runs: HerdRun[]; sources: HerdSource[]; error: string | null }> {
-  let file: unknown = null
-  let fileError: string | null = null
-
-  if (cfg.sourcesFile !== null) {
-    try {
-      file = JSON.parse(await r.read(expandHome(cfg.sourcesFile, home)))
-    } catch (error) {
-      fileError = `sources file ${cfg.sourcesFile}: ${errorText(error)}`
-    }
-  }
-
-  const parsed = sourcesOf(cfg.runs, file)
-  const runs: HerdRun[] = []
-  const sources: HerdSource[] = []
-  const seen = new Set<string>()
-  // A log two sources name (the runs option and the sources file, say) is one run: listed and counted once.
-  const add = (got: { runs: HerdRun[]; source: HerdSource }): void => {
-    for (const run of got.runs) {
-      if (!seen.has(run.key)) {
-        seen.add(run.key)
-        runs.push(run)
-      }
-    }
-    sources.push(got.source)
-  }
-
-  for (const s of parsed.runs) {
-    add(await readStreamSource(r, s, home, nowMs, cache))
-  }
-  for (const s of parsed.lines) {
-    add(await readLineSource(r, s, home, nowMs, cache))
-  }
-
-  const errors = [fileError, ...parsed.errors].filter((e): e is string => e !== null)
-
-  return { runs, sources, error: errors.length === 0 ? null : errors.join('; ') }
-}
-
-/**
- * One refresh: shepherd's tracks and `claude agents` side by side, joined, then
- * the run logs. Never throws for a source; each part carries its own error.
- */
-export async function readSnapshot(r: Reader, cfg: Config, home: string | null, cache: FactsCache): Promise<HerdSnapshot> {
-  const startedAt = await r.now()
-  const shepherd = expandHome(cfg.shepherd, home)
-  const claude = expandHome(cfg.claude, home)
-
-  const [tracksPart, sessionsPart] = await Promise.all([
-    partOf<{ repos: HerdRepo[]; tracks: HerdTrack[] }>(cfg.tracksOn, { repos: [], tracks: [] }, async () =>
-      tracksOf(await runJson(r, [shepherd, 'status', '--all', '--json'], { env: NO_OPTIONAL_LOCKS }), startedAt, cfg.staleMs),
-    ),
-    partOf<HerdSession[]>(cfg.sessionsOn, [], async () => sessionsOf(await runJson(r, [claude, 'agents', '--json', '--all']))),
-  ])
-  const both = joined(tracksPart.value.tracks, sessionsPart.value)
-  const runs = await readRuns(r, cfg, home, startedAt, cache)
-  const doneAt = await r.now()
-
-  return {
-    schema: SCHEMA,
-    at: doneAt,
-    tookMs: Math.max(0, doneAt - startedAt),
-    config: configKeyOf(cfg),
-    tracksOn: cfg.tracksOn,
-    repos: tracksPart.value.repos,
-    tracks: both.tracks,
-    tracksError: tracksPart.error,
-    tracksMissing: tracksPart.isMissing,
-    sessionsOn: cfg.sessionsOn,
-    sessions: both.sessions,
-    sessionsError: sessionsPart.error,
-    sessionsMissing: sessionsPart.isMissing,
-    runs: runs.runs,
-    sources: runs.sources,
-    sourcesError: runs.error,
-  }
-}
-
-// ------------------------------------------------------------------ buttons (the person's presses only)
+// ------------------------------------------------------------------ shepherd presses (the person's only)
 
 const ENTRY_ID = /^[0-9a-f]{4,32}$/
 

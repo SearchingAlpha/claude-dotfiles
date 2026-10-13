@@ -1,11 +1,11 @@
-// herd: one line above the prompt and a /herd pane that say, from any
-// session, which shepherd tracks are blocked, in review or stale, which
-// sessions wait on the person, and whether unattended `claude -p` runs really
-// finished. It follows mods/CLAUDE.md: inert where nothing draws (claude -p,
-// cron, the SDK), observe-only (every engine event but its own registered
-// /herd is passed on unchanged),
-// no tool.call or tool.check hook, no model call, and every process it starts
-// is either a read on its clock or a press of the person's.
+// herd: one line above the prompt and a /herd pane that say, from any session,
+// which shepherd tracks are blocked, in review or stale, which sessions wait on
+// the person, and whether unattended `claude -p` runs really finished. It draws
+// what `herd snapshot --json` prints; herd does the reading and the judging.
+// It follows mods/CLAUDE.md: inert where nothing draws (claude -p, cron, the
+// SDK), observe-only (every engine event but its own registered /herd is passed
+// on unchanged), no tool.call or tool.check hook, no model call, and every
+// process it starts is either a read on its clock or a press of the person's.
 import { atom, read, update } from 'claude-code'
 import type {
   EngineInterface,
@@ -21,10 +21,10 @@ import type {
   Timer,
 } from 'claude-code'
 
-import { ackedOf, bandOf, configKeyOf, configOf, fitted, peerToastOf, plural, snapshotOf, statusOf, tabOf, toneOf, urgentTab, withHealth } from './herd'
+import { ackedOf, bandOf, configKeyOf, configOf, fitted, peerToastOf, plural, sharedOf, statusOf, tabOf, toneOf, urgentTab, withHealth } from './herd'
 import type { Config } from './herd'
-import { acceptEntry, boardUrl, errorText, readInbox, readSnapshot } from './read'
-import type { FactsCache, Reader } from './read'
+import { acceptEntry, ackRuns, boardUrl, errorText, readInbox, readSnapshot } from './read'
+import type { Reader } from './read'
 import { paneOf, styleOf } from './view'
 
 const PANE = 'herd'
@@ -52,8 +52,11 @@ export const PING_TEXT =
 /** A refresh another session stored this recently is shown as it is, not read again. */
 const FRESH_SHARE = 0.75
 
-/** The band is a plain Button: `f: ` before its pieces, and the engine's hint beside it when focused. */
+/** The band is a plain Button: `h: ` before its pieces, and the engine's hint beside it when focused. */
 const BAND_RESERVED_CELLS = 3 + 2
+
+/** The $.store key every session shares its last read under: `{ config, snapshot }`. */
+const SHARED = 'shared'
 
 /**
  * The engine as `session.start` (or `session.attach`) bound it: the timers and
@@ -90,13 +93,13 @@ type Live = {
   /** The snapshot last shown, and the acks it was shown with. */
   last: HerdSnapshot | null
   shownAt: number | null
-  acked: string[]
   shownAcked: string | null
+  /** Keys this session acked with `herd ack`: shown as acked even by a read that began before the press. */
+  ackedHere: string[]
   /** The status line last set: set again only when it changes. */
   status: string | undefined
   /** The faults last put in $.state: written again only when they change. */
   faults: HerdFaults
-  cache: FactsCache
 }
 
 /**
@@ -108,8 +111,6 @@ function hostOf($: EngineInterface): Host {
   return {
     now: () => $.clock.now(),
     run: (argv, init) => $.process.run(argv, init),
-    list: path => $.fs.list(path),
-    read: path => $.fs.read(path),
     storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),
     status: text => $.ui.status(text),
@@ -124,12 +125,12 @@ function hostOf($: EngineInterface): Host {
   }
 }
 
-/** Puts a snapshot and the acks on screen: the state the band and pane read, and the status line. */
-async function show(live: Live, host: Host, snapshot: HerdSnapshot | null, acked: string[]): Promise<void> {
+/** Puts a snapshot and its acks on screen: the state the band and pane read, and the status line. */
+async function show(live: Live, host: Host, snapshot: HerdSnapshot | null): Promise<void> {
+  const acked = ackedOf(snapshot, live.ackedHere)
   const ackedKey = JSON.stringify(acked)
 
   live.last = snapshot
-  live.acked = acked
   if (snapshot !== null && live.shownAt !== snapshot.at) {
     await host.setSnapshot(snapshot)
     live.shownAt = snapshot.at
@@ -157,30 +158,10 @@ async function setFaults(live: Live, host: Host, change: Partial<HerdFaults>): P
   }
 }
 
-/** The acks and the snapshot every session shares. An unreadable store reads as nothing shared, and says why. */
-async function sharedOf(live: Live, host: Host): Promise<{ acked: string[]; stored: HerdSnapshot | null; error: string | null }> {
-  try {
-    return { acked: ackedOf(await host.storeGet('acked')), stored: snapshotOf(await host.storeGet('snapshot')), error: null }
-  } catch (error) {
-    return { acked: live.acked, stored: null, error: errorText(error) }
-  }
-}
-
 /**
- * The acks to show with a read that just landed: the store's now (an Ack
- * pressed while the read ran is there), and this session's own, whose write may
- * still be landing. Acks are only ever added, so the union is never stale.
- */
-async function acksNow(live: Live, host: Host): Promise<string[]> {
-  const stored = await host.storeGet('acked').then(ackedOf, () => [] as string[])
-
-  return ackedOf([...stored, ...live.acked.filter(k => !stored.includes(k))])
-}
-
-/**
- * One refresh: adopt what another session stored a moment ago, else read
- * everything again, show it, and store it for them. `force` reads whatever is
- * stored. A store that refuses the write never hides a fresh read.
+ * One refresh: adopt what another session stored a moment ago, else run herd
+ * again, show it, and store it for them. `force` reads whatever is stored. A
+ * store that refuses the write never hides a fresh read.
  */
 async function tick(live: Live, force: boolean): Promise<void> {
   const host = live.host
@@ -198,22 +179,25 @@ async function tick(live: Live, force: boolean): Promise<void> {
 
   try {
     const now = await host.now()
-    const shared = await sharedOf(live, host)
-    const stored = shared.stored
-    const isFresh = stored !== null && stored.config === live.key && now - stored.at < live.cfg.periodMs * FRESH_SHARE
-    let shareError = shared.error
+    let shareError: string | null = null
+    let stored: HerdSnapshot | null = null
 
-    if (!force && isFresh) {
-      await show(live, host, stored, shared.acked)
+    try {
+      stored = sharedOf(await host.storeGet(SHARED), live.key)
+    } catch (error) {
+      shareError = errorText(error)
+    }
+
+    if (!force && stored !== null && now - stored.at < live.cfg.periodMs * FRESH_SHARE) {
+      await show(live, host, stored)
     } else {
-      const snapshot = await readSnapshot(host, live.cfg, live.home, live.cache)
+      const snapshot = await readSnapshot(host, live.cfg, live.home)
 
       host.log(`herd: read in ${snapshot.tookMs} ms (${snapshot.tracks.length} tracks, ${snapshot.sessions.length} sessions, ${snapshot.runs.length} runs)`)
-      // Not shared.acked: that was read before the read began, and would undo an Ack pressed since.
-      await show(live, host, snapshot, await acksNow(live, host))
+      await show(live, host, snapshot)
 
       if (shareError === null) {
-        shareError = await host.storeSet('snapshot', snapshot).then(
+        shareError = await host.storeSet(SHARED, { config: live.key, snapshot }).then(
           () => null,
           (error: unknown) => errorText(error),
         )
@@ -237,20 +221,19 @@ async function tick(live: Live, force: boolean): Promise<void> {
   }
 }
 
-/** Shows the snapshot another session (or this one before a reload) stored, when it was read with these options. */
+/** Shows the read another session (or this one before a reload) stored, when it was read with these options. */
 async function adoptStored(live: Live, host: Host): Promise<void> {
-  const stored = snapshotOf(await host.storeGet('snapshot'))
-
-  await show(live, host, stored !== null && stored.config === live.key ? stored : null, ackedOf(await host.storeGet('acked')))
+  await show(live, host, sharedOf(await host.storeGet(SHARED), live.key))
 }
 
-/** Adds failures to the acked keys every session shares; re-read right before the write. Says what it acked. */
+/** Marks failures as seen with `herd ack`, for every session and the board, then reads again. Says what it acked. */
 async function ack(live: Live, host: Host, runs: readonly HerdRun[]): Promise<string> {
-  const acked = ackedOf(await host.storeGet('acked'))
-  const next = ackedOf([...acked, ...runs.map(r => r.key).filter(k => !acked.includes(k))])
+  const keys = runs.map(r => r.key)
 
-  await host.storeSet('acked', next)
-  await show(live, host, live.last, next)
+  await ackRuns(host, live.cfg, live.home, keys)
+  live.ackedHere = [...new Set([...live.ackedHere, ...keys])].slice(-500)
+  await show(live, host, live.last)
+  void tick(live, true)
 
   const [only] = runs
 
@@ -326,11 +309,10 @@ export function register(on: On, options: PluginOptions) {
     isQueued: false,
     last: null,
     shownAt: null,
-    acked: [],
     shownAcked: null,
+    ackedHere: [],
     status: undefined,
     faults: NO_FAULTS,
-    cache: new Map(),
   }
 
   // A terminal session, a background one (`claude --bg`, agent view: it starts
@@ -357,21 +339,19 @@ export function register(on: On, options: PluginOptions) {
 
   // /clear, /resume and /branch reset $.state and go on under a new session id,
   // with no session.start: read the id again (so Ping never offers this session
-  // to itself) and copy the shared snapshot and acks back from $.store. Reads
-  // only, so it may run with nothing attached too.
+  // to itself) and copy the shared snapshot back from $.store. Reads only, so
+  // it may run with nothing attached too.
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     const result = await next(e)
 
     if (live.isLive) {
       try {
         live.selfId = await $.session.id().catch(() => live.selfId)
-
-        const stored = snapshotOf(await $.store.get('snapshot'))
-        const acked = ackedOf(await $.store.get('acked'))
-
-        live.last = stored !== null && stored.config === live.key ? stored : live.last
+        live.last = sharedOf(await $.store.get(SHARED), live.key) ?? live.last
         live.shownAt = live.last?.at ?? null
-        live.acked = acked
+
+        const acked = ackedOf(live.last, live.ackedHere)
+
         live.shownAcked = JSON.stringify(acked)
         // The next refresh pins the status line again if it still has something to say.
         live.status = undefined
@@ -518,7 +498,7 @@ export function register(on: On, options: PluginOptions) {
         Button({
           key: 'herd-open',
           label: 'herd',
-          hotkey: 'f',
+          hotkey: 'h',
           plain: true,
           onPress: async () => {
             try {

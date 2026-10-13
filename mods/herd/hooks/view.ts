@@ -95,12 +95,14 @@ function tracksTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     return [dim(els, 'reading…')]
   }
   if (!s.tracksOn) {
-    return [dim(els, 'Tracks are off (the tracks option).')]
+    return [dim(els, 'Tracks are off: herd snapshot ran with --no-tracks.')]
   }
-  if (s.tracksError !== null) {
-    out.push(line(els, { text: s.tracksMissing ? `shepherd is not installed here: ${s.tracksError}` : s.tracksError, tone: s.tracksMissing ? 'dim' : 'warn' }))
+  if (s.tracksMissing) {
+    out.push(dim(els, 'herd found no shepherd to run here: no tracks to show.'))
+  } else if (s.tracksError !== null) {
+    out.push(line(els, { text: s.tracksError, tone: 'warn' }))
   }
-  if (s.tracks.length === 0 && s.tracksError === null) {
+  if (s.tracks.length === 0 && s.tracksError === null && !s.tracksMissing) {
     out.push(dim(els, 'No shepherd tracks in any enrolled repo.'))
   }
 
@@ -145,7 +147,7 @@ function sessionsTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     return [dim(els, 'reading…')]
   }
   if (!s.sessionsOn) {
-    return [dim(els, 'Sessions are off (the sessions option).')]
+    return [dim(els, 'Sessions are off: herd snapshot ran with --no-sessions.')]
   }
 
   const out: RenderElement[] = []
@@ -178,7 +180,7 @@ function sessionsTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     )
   }
   if (sessions.length > MAX_SESSIONS) {
-    out.push(dim(els, `… ${sessions.length - MAX_SESSIONS} more: claude agents`))
+    out.push(dim(els, `… ${sessions.length - MAX_SESSIONS} more: herd ls`))
   }
 
   return out
@@ -197,7 +199,7 @@ function runsTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     out.push(line(els, { text: s.sourcesError, tone: 'warn' }))
   }
   if (s.sources.length === 0) {
-    out.push(dim(els, 'No run sources: set the runs option or a sources file (see the README).'))
+    out.push(dim(els, 'No run sources: herd reads ~/.config/herd/sources.json or $HERD_SOURCES (harnesses/herd/presets/README.md).'))
   }
 
   for (const label of [...new Set(s.sources.map(x => x.label))]) {
