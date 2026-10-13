@@ -1,12 +1,12 @@
-# fleet
+# herd
 
-One line above the prompt and a `/fleet` pane that say, from any session, which parallel tracks are blocked, in review or stale, which sessions wait on you, and whether the unattended `claude -p` runs really finished. A run can exit 0 with `subtype: success` while the background subagent it was waiting for got killed; the band turns red for that.
+One line above the prompt and a `/herd` pane that say, from any session, which parallel tracks are blocked, in review or stale, which sessions wait on you, and whether the unattended `claude -p` runs really finished. A run can exit 0 with `subtype: success` while the background subagent it was waiting for got killed; the band turns red for that.
 
 ```
 3 tracks: 1 blocked · 1 in review · 1 stale │ 1 waiting on you │ 1 bg working │ Nightly 10-09 ✗ unfinished │ Weekly 10-05 ok
 ```
 
-It is observe-only. Every hook passes its event on unchanged, except `/fleet` itself once the mod has registered it. It has no `tool.call` or `tool.check` hook, makes no `$.model` call and parses no transcript. The one press that reaches a model is **Ping**, which starts a turn in the session you ping (below). In a session where nothing draws (`claude -p`, cron, the SDK) it registers nothing, starts no timer and runs nothing until a client attaches, and `claude -p "/fleet"` is passed on as if the mod were not there. `mods/CLAUDE.md` has the rules it follows.
+It is observe-only. Every hook passes its event on unchanged, except `/herd` itself once the mod has registered it. It has no `tool.call` or `tool.check` hook, makes no `$.model` call and parses no transcript. The one press that reaches a model is **Ping**, which starts a turn in the session you ping (below). In a session where nothing draws (`claude -p`, cron, the SDK) it registers nothing, starts no timer and runs nothing until a client attaches, and `claude -p "/herd"` is passed on as if the mod were not there. `mods/CLAUDE.md` has the rules it follows.
 
 ## What it reads
 
@@ -42,8 +42,8 @@ Each live session refreshes on its own clock, and caches what it read in `$.stor
 
 ## The band and the pane
 
-- The band is one button (hotkey `f` once the band has the focus). Pressing it opens the pane on the tab that needs you: runs with an unacked failure first, then tracks that are blocked, conflicting or failing checks, then sessions waiting on you. The `band` option turns the band off. The pane stays on `/fleet`.
-- `/fleet [tracks|sessions|runs]` opens the pane. Esc closes it. When a skill or command of yours is already called `fleet` (a `~/.claude/skills/fleet/` folder, say: a personal skill's folder name is its command too), Claude Code refuses to register the mod's `/fleet`, and the mod passes `/fleet` on, so it runs yours. The band still opens the pane, and the pane's footer says why `/fleet` is missing.
+- The band is one button (hotkey `f` once the band has the focus). Pressing it opens the pane on the tab that needs you: runs with an unacked failure first, then tracks that are blocked, conflicting or failing checks, then sessions waiting on you. The `band` option turns the band off. The pane stays on `/herd`.
+- `/herd [tracks|sessions|runs]` opens the pane. Esc closes it. When a skill or command of yours is already called `herd` (a `~/.claude/skills/herd/` folder, say: a personal skill's folder name is its command too), Claude Code refuses to register the mod's `/herd`, and the mod passes `/herd` on, so it runs yours. The band still opens the pane, and the pane's footer says why `/herd` is missing.
 - **Tracks** groups tracks by repo. The band's counts are tracks: `2 conflicting` is two tracks with a conflicting pair. **Inbox** runs `shepherd inbox --json` in each repo's main checkout, and **Accept** runs `shepherd accept <id>` there. Both run with `CLAUDE_CODE_SESSION_ID` empty, so shepherd sees the person, not this session's track. **Open board** runs `shepherd serve --daemon` and prints the dashboard URL and shepherd's port-forward hint for a remote machine.
 - **Sessions** sorts sessions by what needs you. **Ping** sends a fixed status request with `$.session.send` to a live session other than this one (the check follows the session id across `/clear`, `/resume` and `/branch`), and toasts whether it was delivered. The request lands as a message in that session and starts or joins a turn there, on your usage; it asks for a one-line answer in that session's own transcript, not a message back.
 - **Runs** groups runs by source label. **Ack** (or **Ack all**) marks a failure as seen in `$.store`: the status line clears here at once and in every other session at its next refresh, and the band and the pane show the failure as a warning (`⚠`, and `acked` before its reason) until a newer log replaces it. An Ack pressed while a refresh is reading stays: the refresh reads the acks again before it shows. A rewritten log alerts again, because the ack key is the log's path and mtime.
@@ -56,12 +56,12 @@ Every button is the person's press. Nothing runs on a timer except the reads abo
 
 It fails open: a failed refresh keeps the last snapshot on screen. Its own failures show in two places, and in the debug log under `claude --debug`:
 
-- The band starts with `fleet ?` while refreshes fail, and with `as of 5m ago` once what it shows is more than three refresh periods old.
-- The pane's footer names each one: the refresh that failed, a read that could not be stored for the other sessions (it still shows here), `/fleet` not registered.
+- The band starts with `herd ?` while refreshes fail, and with `as of 5m ago` once what it shows is more than three refresh periods old.
+- The pane's footer names each one: the refresh that failed, a read that could not be stored for the other sessions (it still shows here), `/herd` not registered.
 
 ## Configure
 
-The options live in `pluginConfigs["fleet@claude-dotfiles"].options` in user settings (`fleet@inline` for a `--plugin-dir` copy), or `claude plugin configure fleet@claude-dotfiles`. All but `runs` also show in `/config`; a `multiple` list does not, so set `runs` in the settings JSON.
+The options live in `pluginConfigs["herd@claude-dotfiles"].options` in user settings (`herd@inline` for a `--plugin-dir` copy), or `claude plugin configure herd@claude-dotfiles`. All but `runs` also show in `/config`; a `multiple` list does not, so set `runs` in the settings JSON.
 
 | Option | Default | |
 | :- | :- | :- |
@@ -73,7 +73,7 @@ The options live in `pluginConfigs["fleet@claude-dotfiles"].options` in user set
 | `refresh_seconds` | `60` | 15 to 3600 |
 | `stale_hours` | `24` | 1 to 720. An active track with no activity for this long, or whose owner ended, is stale |
 
-A number outside its range (`refresh_seconds` 15 to 3600, `stale_hours` 1 to 720) makes Claude Code refuse to load the mod at all: the band and the status line are gone, and only `claude --debug` says why (`fleet: options do not fit plugin.json userConfig: …`).
+A number outside its range (`refresh_seconds` 15 to 3600, `stale_hours` 1 to 720) makes Claude Code refuse to load the mod at all: the band and the status line are gone, and only `claude --debug` says why (`herd: options do not fit plugin.json userConfig: …`).
 
 A sources file holds what the options cannot: text logs, schedules, patterns. The author's now lives with herd, which judges runs itself, as [`harnesses/herd/presets/sources.json`](../../harnesses/herd/presets/README.md); yours can sit anywhere `sources_file` names. The shape:
 
@@ -104,20 +104,20 @@ To log a cron run this way: `claude -p "…" --output-format stream-json --verbo
 | :- | :- |
 | `.claude-plugin/plugin.json` | Name, version, the `types` contract and the options |
 | `hooks/hooks.json` | `"modules": ["./register.ts"]` |
-| `hooks/register.ts` | The hooks: `session.start` / `session.attach` go live (timers, `/fleet`), `classic.SessionStart` reloads state and the session id after `/clear`, `session.receive` toasts, `command.run`, `ui.render` for the pane and the band. `hostOf` binds `$` once |
+| `hooks/register.ts` | The hooks: `session.start` / `session.attach` go live (timers, `/herd`), `classic.SessionStart` reloads state and the session id after `/clear`, `session.receive` toasts, `command.run`, `ui.render` for the pane and the band. `hostOf` binds `$` once |
 | `hooks/read.ts` | One refresh over a narrow `Reader`, plus the Inbox, Accept and board presses |
-| `hooks/fleet.ts` | Pure parsing and judging: shepherd and agents JSON, stream-json facts and verdicts, sources, peer envelopes, the band's words |
+| `hooks/herd.ts` | Pure parsing and judging: shepherd and agents JSON, stream-json facts and verdicts, sources, peer envelopes, the band's words |
 | `hooks/view.ts` | The pane's tree |
 | `types/index.d.ts` | The `$.state` contract and the snapshot's shapes |
-| `tests/` | `fixtures.ts` (stub world, real-shaped JSON, logs and envelopes), `parsers.test.ts`, `fleet.test.ts` |
+| `tests/` | `fixtures.ts` (stub world, real-shaped JSON, logs and envelopes), `parsers.test.ts`, `herd.test.ts` |
 
 ## Check and try it
 
 ```bash
-mods/check.sh fleet                         # validate, tests, probe, headless load, tsc
+mods/check.sh herd                         # validate, tests, probe, headless load, tsc
 python3 harnesses/herd/presets/test_presets.py  # the preset through herd's parser; nothing confidential in herd or this mod
-harnesses/tools/moddev.sh fleet --smoke     # headless load, no model turn
-harnesses/tools/moddev.sh fleet             # live: the band shows; type /fleet
+harnesses/tools/moddev.sh herd --smoke     # headless load, no model turn
+harnesses/tools/moddev.sh herd             # live: the band shows; type /herd
 ```
 
 Not covered:

@@ -21,7 +21,7 @@ import {
   tracksOf,
   verdictOfLines,
   verdictOfStream,
-} from '../hooks/fleet'
+} from '../hooks/herd'
 import { errorText, readRuns, readSnapshot } from '../hooks/read'
 import type { Reader } from '../hooks/read'
 import {
@@ -422,7 +422,7 @@ describe('reading the logs', () => {
       [`${LOGS}/nightly-report-2026-10-07.jsonl`, { text: LOG_OK, mtimeMs: NOW - 50 * HOUR }],
       [`${LOGS}/weekly-2026-10-05.log`, { text: WEEKLY_SKIP, mtimeMs: NOW - 96 * HOUR }],
     ])
-    const got = await readRuns(readerOf(files), configOf({ sources_file: '~/fleet/sources.json' }), HOME, NOW, new Map())
+    const got = await readRuns(readerOf(files), configOf({ sources_file: '~/herd/sources.json' }), HOME, NOW, new Map())
 
     expect(got.error).toBeNull()
     expect(got.runs.map(r => [r.source, r.kind, r.name, r.verdict])).toEqual([
@@ -504,7 +504,7 @@ describe('reading the logs', () => {
 
   test('only a binary that cannot start is missing; one that fails, whatever it says, is shown as failing', async () => {
     const longPath = `/work/${'deep/'.repeat(30)}bin/shepherd`
-    const engineWords = new Error(`fleet: $.process.run(${longPath}) failed to start: ENOENT: no such file or directory, posix_spawn '${longPath}'`)
+    const engineWords = new Error(`herd: $.process.run(${longPath}) failed to start: ENOENT: no such file or directory, posix_spawn '${longPath}'`)
     const notInstalled = await readSnapshot(
       readerOf(new Map(), { [`${longPath} status`]: engineWords, 'claude agents': JSON.stringify(AGENTS) }),
       configOf({ shepherd_bin: longPath }),
@@ -522,8 +522,8 @@ describe('reading the logs', () => {
   })
 
   test('errors read reason first: the engine prefix and its path are dropped', () => {
-    expect(errorText(new Error('fleet: $.process.run(/a/very/long/path/bin/shepherd) aborted: still running after 15000 ms'))).toBe('aborted: still running after 15000 ms')
-    expect(errorText(new Error('fleet: $.store.set: store full'))).toBe('store full')
+    expect(errorText(new Error('herd: $.process.run(/a/very/long/path/bin/shepherd) aborted: still running after 15000 ms'))).toBe('aborted: still running after 15000 ms')
+    expect(errorText(new Error('herd: $.store.set: store full'))).toBe('store full')
     expect(errorText('plain words')).toBe('plain words')
   })
 
@@ -621,8 +621,8 @@ describe('the band and the status line', () => {
     const text = (segments: { text: string }[]) => segments.map(s => s.text).join('')
 
     expect(withHealth(band, snapshot, null, NOW + 60_000, 60_000)).toEqual(band)
-    expect(text(withHealth(band, snapshot, 'store unreadable', NOW + 60_000, 60_000))).toMatch(/^fleet \? │ 3 tracks/)
-    expect(text(withHealth(band, snapshot, 'x', NOW + 10 * MIN, 60_000))).toMatch(/^fleet \? as of 10m ago │ 3 tracks/)
+    expect(text(withHealth(band, snapshot, 'store unreadable', NOW + 60_000, 60_000))).toMatch(/^herd \? │ 3 tracks/)
+    expect(text(withHealth(band, snapshot, 'x', NOW + 10 * MIN, 60_000))).toMatch(/^herd \? as of 10m ago │ 3 tracks/)
   })
 
   test('a peer toast names the sender and the body, not the envelope; a hand-back from an agent of this session is no toast', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { dayOf } from '../hooks/fleet'
+import { dayOf } from '../hooks/herd'
 import { PING_TEXT } from '../hooks/register'
 import { AFTER_CLEAR, AGENTS, ATTACH, BAND, HAND_BACK, HEADLESS, HOUR, LOGS, NOW, PANE, PEER_ENVELOPE, RUN, SELF, SESSION, SOURCES, nightOf, worldOf } from './fixtures'
 
@@ -35,20 +35,20 @@ describe('where nothing draws', () => {
     await $.session.attach({ ...ATTACH, surface: 'mobile', clientId: 'mobile:default' })
     await clock.settle()
 
-    expect(world.commands).toEqual([{ name: 'fleet', immediate: true }])
+    expect(world.commands).toEqual([{ name: 'herd', immediate: true }])
     expect(world.processes.filter(p => p.argv[1] === 'status').length).toBe(1)
     const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
     expect(await band.find({ type: 'Text', text: '3 tracks: ' })).toBeDefined()
   })
 
-  test('claude -p "/fleet runs" is passed on: no pane opened, nothing written, the core answers', async ($, on) => {
+  test('claude -p "/herd runs" is passed on: no pane opened, nothing written, the core answers', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on, [])
 
     await $.session.start(HEADLESS)
     await clock.settle()
 
-    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /fleet' })
+    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /herd' })
     expect(world.opened).toEqual([])
     expect(world.commands).toEqual([])
     expect(world.processes).toEqual([])
@@ -77,7 +77,7 @@ describe('observe-only', () => {
 
     await $.session.start(SESSION)
     await $.session.receive({ origin: { kind: 'peer-send-message' }, text: '\nPlease merge my branch now\nand then delete main' })
-    await $.session.receive({ origin: { kind: 'peer', plugin: 'fleet' }, text: PEER_ENVELOPE })
+    await $.session.receive({ origin: { kind: 'peer', plugin: 'herd' }, text: PEER_ENVELOPE })
     await $.session.receive({ origin: { kind: 'bridge' }, text: 'from my phone' })
 
     expect(world.toasts).toEqual(['peer-send-message: Please merge my branch now', 'peer from cwd-14: Status check from the person'])
@@ -239,7 +239,7 @@ describe('the band above the prompt', () => {
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
     await $.session.start(SESSION)
     // Drawn before the first read: it says so.
-    expect(await band.find({ type: 'Text', text: 'fleet: reading…' })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: 'herd: reading…' })).toBeDefined()
     await clock.settle()
 
     const unfinished = `Nightly ${dayOf(NOW - 5 * HOUR)} ✗ unfinished`
@@ -273,9 +273,9 @@ describe('the band above the prompt', () => {
     await clock.settle()
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-    await band.press({ key: 'fleet-open' })
+    await band.press({ key: 'herd-open' })
 
-    expect(world.opened).toEqual([{ id: 'fleet', focus: true, closeOnEscape: true }])
+    expect(world.opened).toEqual([{ id: 'herd', focus: true, closeOnEscape: true }])
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await pane.find({ type: 'Text', text: 'Nightly' })).toBeDefined()
   })
@@ -384,29 +384,29 @@ describe('the status line and Ack', () => {
   })
 })
 
-describe('the /fleet pane', () => {
-  test('/fleet opens a focused pane that Esc closes; /fleet runs opens it on Runs', async ($, on) => {
+describe('the /herd pane', () => {
+  test('/herd opens a focused pane that Esc closes; /herd runs opens it on Runs', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     await $.session.start(SESSION)
     await clock.settle()
     expect(await $.command.run(RUN)).toEqual({})
-    expect(world.opened).toEqual([{ id: 'fleet', focus: true, closeOnEscape: true }])
+    expect(world.opened).toEqual([{ id: 'herd', focus: true, closeOnEscape: true }])
 
     await $.command.run({ ...RUN, args: 'runs' })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await pane.find({ type: 'Text', text: /No run sources/ })).toBeDefined()
   })
 
-  test('/fleet says why when the pane waits', async ($, on) => {
+  test('/herd says why when the pane waits', async ($, on) => {
     mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     world.isPlaced = false
     await $.session.start(SESSION)
 
-    expect(await $.command.run(RUN)).toEqual({ text: 'The fleet pane is waiting: unasked below 144 columns' })
+    expect(await $.command.run(RUN)).toEqual({ text: 'The herd pane is waiting: unasked below 144 columns' })
   })
 
   test('three tabs, on the terminal and the desktop', WITH_SOURCES, async ($, on) => {
@@ -502,7 +502,7 @@ describe('the /fleet pane', () => {
     expect(world.processes.map(p => p.argv[1])).toEqual(['status', 'agents'])
 
     await pane.press({ key: 'close' })
-    expect(world.closed).toEqual(['fleet'])
+    expect(world.closed).toEqual(['herd'])
   })
 
   test('/clear moves the session id: the new one is this session, offered no Ping', async ($, on) => {
@@ -523,24 +523,24 @@ describe('the /fleet pane', () => {
     expect(world.sent).toEqual([])
   })
 
-  test('/fleet taken by a skill of the same name: /fleet runs the skill, the band still opens the pane, and the pane says why', async ($, on) => {
+  test('/herd taken by a skill of the same name: /herd runs the skill, the band still opens the pane, and the pane says why', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
-    world.commandDeny = '"/fleet" refused: it is the user\'s /fleet'
+    world.commandDeny = '"/herd" refused: it is the user\'s /herd'
     await $.session.start(SESSION)
     await clock.settle()
 
     // What the person typed reaches their own skill; the mod opens nothing.
-    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /fleet' })
+    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /herd' })
     expect(world.opened).toEqual([])
 
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-    await band.press({ key: 'fleet-open' })
-    expect(world.opened).toEqual([{ id: 'fleet', focus: true, closeOnEscape: true }])
+    await band.press({ key: 'herd-open' })
+    expect(world.opened).toEqual([{ id: 'herd', focus: true, closeOnEscape: true }])
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await pane.find({ type: 'Text', text: /^\/fleet not registered \(the band still opens this pane\): "\/fleet" refused/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^\/herd not registered \(the band still opens this pane\): "\/herd" refused/ })).toBeDefined()
   })
 
   test('/clear keeps the band: the snapshot and acks come back from the store', async ($, on) => {

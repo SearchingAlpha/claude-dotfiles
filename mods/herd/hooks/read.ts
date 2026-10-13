@@ -1,16 +1,16 @@
-// The fleet's reading half: one refresh over a narrow Reader that register.ts
+// The herd's reading half: one refresh over a narrow Reader that register.ts
 // binds from `$` (and a test or a smoke script binds from fixtures). Every
 // source is read on its own and fails on its own: a missing shepherd, a
 // sources file that does not parse or a log that cannot be read is named in
 // the snapshot, and the rest still shows.
 import type {
-  FleetInboxEntry,
-  FleetRepo,
-  FleetRun,
-  FleetSession,
-  FleetSnapshot,
-  FleetSource,
-  FleetTrack,
+  HerdInboxEntry,
+  HerdRepo,
+  HerdRun,
+  HerdSession,
+  HerdSnapshot,
+  HerdSource,
+  HerdTrack,
   FsEntry,
   ProcessRunInit,
   ProcessRunResult,
@@ -33,8 +33,8 @@ import {
   tracksOf,
   verdictOfLine,
   verdictOfStream,
-} from './fleet'
-import type { Config, LineFind, LineSource, RunSource, StreamFacts, Verdict } from './fleet'
+} from './herd'
+import type { Config, LineFind, LineSource, RunSource, StreamFacts, Verdict } from './herd'
 
 /** What a refresh needs of the engine: the clock, processes, and reads. */
 export type Reader = {
@@ -67,7 +67,7 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 
 /**
  * An error as one short line, the reason first: the engine words a failed call
- * `fleet: $.process.run(/a/long/path) failed to start: ENOENT: …`, and in a
+ * `herd: $.process.run(/a/long/path) failed to start: ENOENT: …`, and in a
  * docked pane the path would push the reason out of sight.
  */
 export const errorText = (error: unknown): string =>
@@ -205,7 +205,7 @@ async function filesOf(r: Reader, glob: string, home: string | null): Promise<{ 
   return { dir, files: entries.filter(e => e.kind === 'file' && pattern.test(e.name)) }
 }
 
-const runOf = (source: string, kind: 'stream' | 'line', path: string, f: FsEntry, v: Verdict): FleetRun => ({
+const runOf = (source: string, kind: 'stream' | 'line', path: string, f: FsEntry, v: Verdict): HerdRun => ({
   key: `${path}@${f.mtimeMs}`,
   source,
   kind,
@@ -216,9 +216,9 @@ const runOf = (source: string, kind: 'stream' | 'line', path: string, f: FsEntry
   ...v,
 })
 
-async function readStreamSource(r: Reader, s: RunSource, home: string | null, nowMs: number, cache: FactsCache): Promise<{ runs: FleetRun[]; source: FleetSource }> {
-  const source: FleetSource = { label: s.label, kind: 'stream', glob: s.glob, error: null, count: 0 }
-  const runs: FleetRun[] = []
+async function readStreamSource(r: Reader, s: RunSource, home: string | null, nowMs: number, cache: FactsCache): Promise<{ runs: HerdRun[]; source: HerdSource }> {
+  const source: HerdSource = { label: s.label, kind: 'stream', glob: s.glob, error: null, count: 0 }
+  const runs: HerdRun[] = []
 
   try {
     const { dir, files } = await filesOf(r, s.glob, home)
@@ -250,9 +250,9 @@ async function readStreamSource(r: Reader, s: RunSource, home: string | null, no
   return { runs, source }
 }
 
-async function readLineSource(r: Reader, s: LineSource, home: string | null, nowMs: number, cache: FactsCache): Promise<{ runs: FleetRun[]; source: FleetSource }> {
-  const source: FleetSource = { label: s.label, kind: 'line', glob: s.glob, error: null, count: 0 }
-  const runs: FleetRun[] = []
+async function readLineSource(r: Reader, s: LineSource, home: string | null, nowMs: number, cache: FactsCache): Promise<{ runs: HerdRun[]; source: HerdSource }> {
+  const source: HerdSource = { label: s.label, kind: 'line', glob: s.glob, error: null, count: 0 }
+  const runs: HerdRun[] = []
 
   try {
     const { dir, files } = await filesOf(r, s.glob, home)
@@ -290,7 +290,7 @@ export async function readRuns(
   home: string | null,
   nowMs: number,
   cache: FactsCache,
-): Promise<{ runs: FleetRun[]; sources: FleetSource[]; error: string | null }> {
+): Promise<{ runs: HerdRun[]; sources: HerdSource[]; error: string | null }> {
   let file: unknown = null
   let fileError: string | null = null
 
@@ -303,11 +303,11 @@ export async function readRuns(
   }
 
   const parsed = sourcesOf(cfg.runs, file)
-  const runs: FleetRun[] = []
-  const sources: FleetSource[] = []
+  const runs: HerdRun[] = []
+  const sources: HerdSource[] = []
   const seen = new Set<string>()
   // A log two sources name (the runs option and the sources file, say) is one run: listed and counted once.
-  const add = (got: { runs: FleetRun[]; source: FleetSource }): void => {
+  const add = (got: { runs: HerdRun[]; source: HerdSource }): void => {
     for (const run of got.runs) {
       if (!seen.has(run.key)) {
         seen.add(run.key)
@@ -333,16 +333,16 @@ export async function readRuns(
  * One refresh: shepherd's tracks and `claude agents` side by side, joined, then
  * the run logs. Never throws for a source; each part carries its own error.
  */
-export async function readSnapshot(r: Reader, cfg: Config, home: string | null, cache: FactsCache): Promise<FleetSnapshot> {
+export async function readSnapshot(r: Reader, cfg: Config, home: string | null, cache: FactsCache): Promise<HerdSnapshot> {
   const startedAt = await r.now()
   const shepherd = expandHome(cfg.shepherd, home)
   const claude = expandHome(cfg.claude, home)
 
   const [tracksPart, sessionsPart] = await Promise.all([
-    partOf<{ repos: FleetRepo[]; tracks: FleetTrack[] }>(cfg.tracksOn, { repos: [], tracks: [] }, async () =>
+    partOf<{ repos: HerdRepo[]; tracks: HerdTrack[] }>(cfg.tracksOn, { repos: [], tracks: [] }, async () =>
       tracksOf(await runJson(r, [shepherd, 'status', '--all', '--json'], { env: NO_OPTIONAL_LOCKS }), startedAt, cfg.staleMs),
     ),
-    partOf<FleetSession[]>(cfg.sessionsOn, [], async () => sessionsOf(await runJson(r, [claude, 'agents', '--json', '--all']))),
+    partOf<HerdSession[]>(cfg.sessionsOn, [], async () => sessionsOf(await runJson(r, [claude, 'agents', '--json', '--all']))),
   ])
   const both = joined(tracksPart.value.tracks, sessionsPart.value)
   const runs = await readRuns(r, cfg, home, startedAt, cache)
@@ -373,8 +373,8 @@ export async function readSnapshot(r: Reader, cfg: Config, home: string | null, 
 const ENTRY_ID = /^[0-9a-f]{4,32}$/
 
 /** Shepherd's unaccepted entries addressed to the person, in every enrolled repo. */
-export async function readInbox(r: Reader, cfg: Config, home: string | null, repos: readonly FleetRepo[]): Promise<{ entries: FleetInboxEntry[]; errors: string[] }> {
-  const entries: FleetInboxEntry[] = []
+export async function readInbox(r: Reader, cfg: Config, home: string | null, repos: readonly HerdRepo[]): Promise<{ entries: HerdInboxEntry[]; errors: string[] }> {
+  const entries: HerdInboxEntry[] = []
   const errors: string[] = []
 
   for (const repo of repos) {
@@ -415,7 +415,7 @@ export async function readInbox(r: Reader, cfg: Config, home: string | null, rep
 }
 
 /** `shepherd accept <id>` in the entry's repo, as the person. Resolves what shepherd printed. */
-export async function acceptEntry(r: Reader, cfg: Config, home: string | null, entry: FleetInboxEntry): Promise<string> {
+export async function acceptEntry(r: Reader, cfg: Config, home: string | null, entry: HerdInboxEntry): Promise<string> {
   if (!ENTRY_ID.test(entry.id)) {
     throw new Error(`not a shepherd entry id: ${entry.id}`)
   }

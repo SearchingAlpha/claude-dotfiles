@@ -1,16 +1,16 @@
-// The fleet's pure half: what `shepherd status --all --json`, `claude agents
+// The herd's pure half: what `shepherd status --all --json`, `claude agents
 // --json --all` and headless `claude -p --output-format stream-json` logs say,
 // reduced to the snapshot the band and the pane draw, and the words they draw.
 // No `$` and no I/O here: read.ts reads, this file judges.
 import type {
-  FleetRepo,
-  FleetRun,
-  FleetSession,
-  FleetSnapshot,
-  FleetSource,
-  FleetTab,
-  FleetTone,
-  FleetTrack,
+  HerdRepo,
+  HerdRun,
+  HerdSession,
+  HerdSnapshot,
+  HerdSource,
+  HerdTab,
+  HerdTone,
+  HerdTrack,
 } from 'claude-code'
 
 const HOUR_MS = 3_600_000
@@ -135,7 +135,7 @@ export function configOf(options: Readonly<Record<string, unknown>>): Config {
 /**
  * The shape of the snapshot this build writes to $.store. Sessions still running
  * an older build share the same store file: a snapshot of another schema is
- * treated as absent, never drawn. Raise it with any change to FleetSnapshot.
+ * treated as absent, never drawn. Raise it with any change to HerdSnapshot.
  */
 export const SCHEMA = 2
 
@@ -153,8 +153,8 @@ export function expandHome(path: string, home: string | null): string {
   return home.replace(/\/$/, '') + path.slice(1)
 }
 
-/** The tab `/fleet <word>` names, or null. */
-export function tabOf(args: string): FleetTab | null {
+/** The tab `/herd <word>` names, or null. */
+export function tabOf(args: string): HerdTab | null {
   const word = args.trim().toLowerCase()
 
   return word === 'tracks' || word === 'sessions' || word === 'runs' ? word : null
@@ -163,13 +163,13 @@ export function tabOf(args: string): FleetTab | null {
 // ------------------------------------------------------------------ tracks
 
 /** Shepherd's tracks, flat, with the repo each sits in. Throws on JSON that is not shepherd's. */
-export function tracksOf(status: unknown, nowMs: number, staleMs: number): { repos: FleetRepo[]; tracks: FleetTrack[] } {
+export function tracksOf(status: unknown, nowMs: number, staleMs: number): { repos: HerdRepo[]; tracks: HerdTrack[] } {
   if (!isRecord(status) || !Array.isArray(status.repos)) {
     throw new Error('not shepherd status JSON (no repos)')
   }
 
-  const repos: FleetRepo[] = []
-  const tracks: FleetTrack[] = []
+  const repos: HerdRepo[] = []
+  const tracks: HerdTrack[] = []
 
   for (const repo of status.repos) {
     if (!isRecord(repo)) {
@@ -229,12 +229,12 @@ export function tracksOf(status: unknown, nowMs: number, staleMs: number): { rep
 // ------------------------------------------------------------------ sessions
 
 /** `claude agents --json --all`, one row per session. Throws on JSON that is not a list. */
-export function sessionsOf(agents: unknown): FleetSession[] {
+export function sessionsOf(agents: unknown): HerdSession[] {
   if (!Array.isArray(agents)) {
     throw new Error('not claude agents JSON (no list)')
   }
 
-  const sessions: FleetSession[] = []
+  const sessions: HerdSession[] = []
 
   for (const a of agents) {
     if (!isRecord(a)) {
@@ -270,7 +270,7 @@ export function sessionsOf(agents: unknown): FleetSession[] {
 }
 
 /** Marks each track whose owner waits on the person, and each session with the track it owns. */
-export function joined(tracks: FleetTrack[], sessions: FleetSession[]): { tracks: FleetTrack[]; sessions: FleetSession[] } {
+export function joined(tracks: HerdTrack[], sessions: HerdSession[]): { tracks: HerdTrack[]; sessions: HerdSession[] } {
   const byId = new Map(sessions.map(s => [s.sessionId, s]))
   const owned = new Map<string, string>()
 
@@ -288,7 +288,7 @@ export function joined(tracks: FleetTrack[], sessions: FleetSession[]): { tracks
 }
 
 /** Waiting on the person first, then working, idle, finished, and failed or stopped last. */
-export function sessionRank(s: FleetSession): number {
+export function sessionRank(s: HerdSession): number {
   if (s.isBlocked) {
     return 0
   }
@@ -531,7 +531,7 @@ export function pickLogs<T extends LogFile>(files: readonly T[], pattern: RegExp
 
 // ------------------------------------------------------------------ verdicts
 
-export type Verdict = { verdict: string; tone: FleetTone; why: string; detail: string }
+export type Verdict = { verdict: string; tone: HerdTone; why: string; detail: string }
 
 /**
  * How many subagents a run spawned, and how each ended. `killed` is a stop the
@@ -963,7 +963,7 @@ export function lateRun(
   newestMs: number | null,
   nowMs: number,
   expectEveryHours: number | null,
-): FleetRun | null {
+): HerdRun | null {
   if (expectEveryHours === null || (newestMs !== null && nowMs - newestMs <= expectEveryHours * HOUR_MS)) {
     return null
   }
@@ -985,19 +985,19 @@ export function lateRun(
 
 // ------------------------------------------------------------------ the band and the status line
 
-export type Segment = { text: string; tone: FleetTone }
+export type Segment = { text: string; tone: HerdTone }
 
 /** A failure the person acked reads as a warning: still in the band, gone from the status line. */
-export function toneOf(run: FleetRun, acked: ReadonlySet<string>): FleetTone {
+export function toneOf(run: HerdRun, acked: ReadonlySet<string>): HerdTone {
   return run.tone === 'fail' && acked.has(run.key) ? 'warn' : run.tone
 }
 
-const uniqueLabels = (sources: readonly FleetSource[]): string[] => [...new Set(sources.map(s => s.label))]
+const uniqueLabels = (sources: readonly HerdSource[]): string[] => [...new Set(sources.map(s => s.label))]
 
 /** What the band says, as colored pieces: tracks, sessions waiting, then each run source. */
-export function bandOf(snapshot: FleetSnapshot | null, acked: ReadonlySet<string>): Segment[] {
+export function bandOf(snapshot: HerdSnapshot | null, acked: ReadonlySet<string>): Segment[] {
   if (snapshot === null) {
-    return [{ text: 'fleet: reading…', tone: 'dim' }]
+    return [{ text: 'herd: reading…', tone: 'dim' }]
   }
 
   const out: Segment[] = []
@@ -1095,14 +1095,14 @@ export function bandOf(snapshot: FleetSnapshot | null, acked: ReadonlySet<string
 const STALE_PERIODS = 3
 
 /**
- * The band with what qualifies it in front: `fleet ?` while refreshes fail,
+ * The band with what qualifies it in front: `herd ?` while refreshes fail,
  * `as of 5m ago` once the snapshot is older than a few refresh periods.
  */
-export function withHealth(band: readonly Segment[], snapshot: FleetSnapshot | null, refreshFault: string | null, nowMs: number, periodMs: number): Segment[] {
+export function withHealth(band: readonly Segment[], snapshot: HerdSnapshot | null, refreshFault: string | null, nowMs: number, periodMs: number): Segment[] {
   const notes: Segment[] = []
 
   if (refreshFault !== null) {
-    notes.push({ text: 'fleet ?', tone: 'warn' })
+    notes.push({ text: 'herd ?', tone: 'warn' })
   }
   if (snapshot !== null && nowMs - snapshot.at > STALE_PERIODS * periodMs) {
     notes.push({ text: `as of ${agoOf(snapshot.at, nowMs)} ago`, tone: 'dim' })
@@ -1161,7 +1161,7 @@ export function fitted(segments: readonly Segment[], columns: number): Segment[]
 }
 
 /** The tab the band opens: what needs the person most. */
-export function urgentTab(snapshot: FleetSnapshot | null, acked: ReadonlySet<string>, fallback: FleetTab): FleetTab {
+export function urgentTab(snapshot: HerdSnapshot | null, acked: ReadonlySet<string>, fallback: HerdTab): HerdTab {
   if (snapshot === null) {
     return fallback
   }
@@ -1179,7 +1179,7 @@ export function urgentTab(snapshot: FleetSnapshot | null, acked: ReadonlySet<str
 }
 
 /** The status line: the oldest unacknowledged run failure, and how many more there are; undefined when none. */
-export function statusOf(snapshot: FleetSnapshot | null, acked: ReadonlySet<string>): string | undefined {
+export function statusOf(snapshot: HerdSnapshot | null, acked: ReadonlySet<string>): string | undefined {
   const fails = (snapshot?.runs ?? []).filter(r => toneOf(r, acked) === 'fail').sort((a, b) => a.mtimeMs - b.mtimeMs)
   const [f] = fails
 
@@ -1189,7 +1189,7 @@ export function statusOf(snapshot: FleetSnapshot | null, acked: ReadonlySet<stri
 
   const where = f.kind === 'late' ? f.source : `${f.source} ${f.name}${f.mtimeMs > 0 ? ` ${dayOf(f.mtimeMs)}` : ''}`
 
-  return `${where}: ${f.why}${fails.length > 1 ? ` (+${fails.length - 1} more, /fleet runs)` : ''}`
+  return `${where}: ${f.why}${fails.length > 1 ? ` (+${fails.length - 1} more, /herd runs)` : ''}`
 }
 
 /** The acked keys kept in $.store, dropping what is not a string; the newest 500. */
@@ -1281,7 +1281,7 @@ const SOURCE_SHAPE: Readonly<Record<string, Kind>> = { label: 'string', kind: 's
  * another shape (a hand-edited or corrupted store file, a build that changed a
  * row and kept SCHEMA). Null is read again, never drawn.
  */
-export function snapshotOf(value: unknown): FleetSnapshot | null {
+export function snapshotOf(value: unknown): HerdSnapshot | null {
   if (!isRecord(value) || value.schema !== SCHEMA || !hasShape(value, SNAPSHOT_SHAPE)) {
     return null
   }
@@ -1293,13 +1293,13 @@ export function snapshotOf(value: unknown): FleetSnapshot | null {
     listOf(value.runs, RUN_SHAPE) &&
     listOf(value.sources, SOURCE_SHAPE)
 
-  return rows ? (value as unknown as FleetSnapshot) : null
+  return rows ? (value as unknown as HerdSnapshot) : null
 }
 
 // ------------------------------------------------------------------ the pane's lines
 
 /** One track's line in the pane: status, review, owner, the first warning. */
-export function trackLineOf(t: FleetTrack, nowMs: number): Segment {
+export function trackLineOf(t: HerdTrack, nowMs: number): Segment {
   const review =
     t.reviewId === null
       ? ''
@@ -1311,7 +1311,7 @@ export function trackLineOf(t: FleetTrack, nowMs: number): Segment {
       : ` · ${t.owner}`
   const conflicts = t.conflicts > 0 ? ` · ${plural(t.conflicts, 'conflict')}` : ''
   const warning = t.warnings.find(w => !w.startsWith('owner session ended') && w !== 'unclaimed')
-  const tone: FleetTone =
+  const tone: HerdTone =
     t.isBlocked || t.conflicts > 0 || t.checks === 'failing'
       ? 'fail'
       : t.isStale || t.status === 'merged'
@@ -1326,19 +1326,19 @@ export function trackLineOf(t: FleetTrack, nowMs: number): Segment {
 }
 
 /** One session's line in the pane. */
-export function sessionLineOf(s: FleetSession, nowMs: number): Segment {
+export function sessionLineOf(s: HerdSession, nowMs: number): Segment {
   const state = s.isBlocked
     ? `waiting on you${s.waitingFor === null ? '' : `: ${s.waitingFor}`}`
     : [s.state, s.status].filter((x): x is string => x !== null).join('/') || 'ended'
   const age = s.startedAt === null ? '' : ` · ${agoOf(s.startedAt, nowMs)}`
-  const tone: FleetTone =
+  const tone: HerdTone =
     s.isBlocked || s.state === 'failed' ? 'fail' : s.status === 'busy' || s.state === 'working' ? 'busy' : s.isLive ? 'ok' : 'dim'
 
   return { text: `${s.name ?? s.shortId ?? s.sessionId.slice(0, 8)} · ${s.kind} · ${state}${age}${s.track === null ? '' : ` · ${s.track}`}`, tone }
 }
 
 /** One run's line in the pane; `acked` before the reason, where a cut line still shows it. */
-export function runLineOf(r: FleetRun, acked: ReadonlySet<string>): Segment {
+export function runLineOf(r: HerdRun, acked: ReadonlySet<string>): Segment {
   const when = r.mtimeMs > 0 ? ` ${stampOf(r.mtimeMs)}` : ''
   const seen = r.tone === 'fail' && acked.has(r.key) ? ' · acked' : ''
 

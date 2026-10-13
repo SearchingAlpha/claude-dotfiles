@@ -1,0 +1,4 @@
+{
+  "description": "herd: the band above the prompt and the /herd pane (tracks, sessions, headless runs). Observe-only; inert where nothing draws (claude -p).",
+  "modules": ["./register.ts"]
+}

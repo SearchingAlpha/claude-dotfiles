@@ -1,6 +1,6 @@
 import type { On, RenderSurface } from 'claude-code'
 
-export const PLUGIN = 'fleet'
+export const PLUGIN = 'herd'
 
 /** 2026-10-09 12:00 UTC: the same calendar day in every timezone the tests run in. */
 export const NOW = Date.UTC(2026, 9, 9, 12, 0, 0)
@@ -9,7 +9,7 @@ export const HOUR = 3_600_000
 
 export const HOME = '/home/user'
 export const LOGS = `${HOME}/logs`
-export const SOURCES = `${HOME}/fleet/sources.json`
+export const SOURCES = `${HOME}/herd/sources.json`
 
 /** session.start as an interactive terminal session raises it, and as claude -p does. */
 export const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -27,9 +27,9 @@ export const AFTER_CLEAR = '22222222-2222-4222-8222-222222222222'
 /** A shepherd at a path long enough that a 160-character cut would drop the reason. */
 export const LONG_BIN = `/work/${'deep/'.repeat(30)}bin/shepherd`
 
-/** /fleet as the person types it at the prompt: the types require origin and presentation. */
+/** /herd as the person types it at the prompt: the types require origin and presentation. */
 export const RUN = {
-  command: 'fleet',
+  command: 'herd',
   args: '',
   origin: { kind: 'composer' },
   presentation: { isFullscreen: false, columns: 120 },
@@ -39,9 +39,9 @@ export const RUN = {
 export const PANE = {
   plugin: PLUGIN,
   component: 'Pane',
-  requestId: 'fleet',
+  requestId: 'herd',
   viewport: { columns: 160, rows: 40 },
-  props: { title: 'Fleet', isFocused: true, bodyColumns: 140, placement: 'inline', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  props: { title: 'Herd', isFocused: true, bodyColumns: 140, placement: 'inline', scroll: { offset: 0, bodyRows: 30 }, view: {} },
 } as const
 
 export const BAND = {
@@ -311,7 +311,7 @@ export type World = {
   store: Map<string, unknown>
   /** What `$.store.set` answers: null stores, a string refuses with it (a full store, say). */
   storeDeny: string | null
-  /** What `$.command.register` answers for /fleet: null registers it, a string refuses with it. */
+  /** What `$.command.register` answers for /herd: null registers it, a string refuses with it. */
   commandDeny: string | null
   /** What `$.session.id()` answers; /clear moves it on. */
   selfId: string
@@ -483,7 +483,7 @@ export function worldOf(on: On, surfaces: readonly RenderSurface[] = ['terminal'
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.attach', ($, e) => ({ clientId: e.clientId }))
   on('session.receive', ($, e) => ({ text: e.text }))
-  // What runs /fleet when the mod passes it on: the person's own skill of that name, say.
+  // What runs /herd when the mod passes it on: the person's own skill of that name, say.
   on('command.run', ($, e) => ({ text: `core ran /${e.command}` }))
   on('classic.SessionStart', () => ({}))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))

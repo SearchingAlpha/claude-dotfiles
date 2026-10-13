@@ -1,7 +1,7 @@
 {
-  "name": "fleet",
+  "name": "herd",
   "version": "0.1.0",
-  "description": "Observe-only fleet band and /fleet pane: shepherd tracks blocked, in review or stale, sessions waiting on you, and whether headless claude -p runs really finished.",
+  "description": "Observe-only herd band and /herd pane: shepherd tracks blocked, in review or stale, sessions waiting on you, and whether headless claude -p runs really finished.",
   "author": {
     "name": "SearchingAlpha"
   },
@@ -10,7 +10,7 @@
     "band": {
       "type": "boolean",
       "title": "Band above the prompt",
-      "description": "Draw the one-line fleet band above the prompt. Off leaves the band to other mods; /fleet still opens the pane.",
+      "description": "Draw the one-line herd band above the prompt. Off leaves the band to other mods; /herd still opens the pane.",
       "default": true
     },
     "tracks": {

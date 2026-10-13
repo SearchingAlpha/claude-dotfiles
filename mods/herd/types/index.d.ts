@@ -1,24 +1,24 @@
-// The fleet's $.state contract, and the snapshot it draws from. Every value the
-// module reads or writes with atom/read/update is declared under 'fleet'; the
+// The herd's $.state contract, and the snapshot it draws from. Every value the
+// module reads or writes with atom/read/update is declared under 'herd'; the
 // snapshot's shapes are declared beside it so the hooks import them from
 // 'claude-code'. No imports and no `export {}`: `claude plugin validate`
 // refuses a contract that exports.
 declare module 'claude-code' {
   /** How a line or a run reads: green, yellow, red, in progress, or nothing to say. */
-  type FleetTone = 'ok' | 'warn' | 'fail' | 'busy' | 'dim'
+  type HerdTone = 'ok' | 'warn' | 'fail' | 'busy' | 'dim'
 
   /** The pane's tabs. */
-  type FleetTab = 'tracks' | 'sessions' | 'runs'
+  type HerdTab = 'tracks' | 'sessions' | 'runs'
 
   /** One enrolled repo, as `shepherd status --all --json` lists it. */
-  interface FleetRepo {
+  interface HerdRepo {
     name: string
     /** The main checkout: where `shepherd inbox` and `accept` run. */
     primary: string
   }
 
   /** One shepherd track, joined to its owner's row in `claude agents --json --all`. */
-  interface FleetTrack {
+  interface HerdTrack {
     repo: string
     name: string
     /** active, review, paused or merged. */
@@ -47,7 +47,7 @@ declare module 'claude-code' {
   }
 
   /** One row of `claude agents --json --all`. */
-  interface FleetSession {
+  interface HerdSession {
     sessionId: string
     shortId: string | null
     name: string | null
@@ -68,7 +68,7 @@ declare module 'claude-code' {
   }
 
   /** One headless run log (a stream-json log, or a text log's last matching line). */
-  interface FleetRun {
+  interface HerdRun {
     /** path@mtimeMs: what Ack stores; a rewritten log alerts again. */
     key: string
     source: string
@@ -79,7 +79,7 @@ declare module 'claude-code' {
     mtimeMs: number
     /** ok, denied, asked, running, quiet, unjudged, unfinished, failed, no result, no line, unreadable, late. */
     verdict: string
-    tone: FleetTone
+    tone: HerdTone
     /** One phrase for the band and the status line. */
     why: string
     /** The numbers the Runs tab shows under it. */
@@ -87,7 +87,7 @@ declare module 'claude-code' {
   }
 
   /** One configured run source and what reading it found. */
-  interface FleetSource {
+  interface HerdSource {
     label: string
     kind: 'stream' | 'line'
     glob: string
@@ -96,8 +96,8 @@ declare module 'claude-code' {
   }
 
   /** What one refresh found; cached in $.store and shared by every session that loads the mod. */
-  interface FleetSnapshot {
-    /** The shape's version (SCHEMA in fleet.ts): a snapshot another build wrote is not drawn. */
+  interface HerdSnapshot {
+    /** The shape's version (SCHEMA in herd.ts): a snapshot another build wrote is not drawn. */
     schema: number
     at: number
     /** How long the read took, in ms. */
@@ -105,22 +105,22 @@ declare module 'claude-code' {
     /** The options it was read with: a session with other options reads for itself. */
     config: string
     tracksOn: boolean
-    repos: FleetRepo[]
-    tracks: FleetTrack[]
+    repos: HerdRepo[]
+    tracks: HerdTrack[]
     tracksError: string | null
     /** The shepherd binary would not start: the band leaves tracks out. */
     tracksMissing: boolean
     sessionsOn: boolean
-    sessions: FleetSession[]
+    sessions: HerdSession[]
     sessionsError: string | null
     sessionsMissing: boolean
-    runs: FleetRun[]
-    sources: FleetSource[]
+    runs: HerdRun[]
+    sources: HerdSource[]
     sourcesError: string | null
   }
 
   /** One unaccepted shepherd log entry addressed to the person. */
-  interface FleetInboxEntry {
+  interface HerdInboxEntry {
     repo: string
     primary: string
     id: string
@@ -131,28 +131,28 @@ declare module 'claude-code' {
   }
 
   /** The mod's own failures, shown in the pane's footer: none of them stops the rest. */
-  interface FleetFaults {
-    /** The last refresh failed (the band shows `fleet ?` until one lands). */
+  interface HerdFaults {
+    /** The last refresh failed (the band shows `herd ?` until one lands). */
     refresh: string | null
     /** The last read could not be stored for the other sessions. */
     share: string | null
-    /** `/fleet` could not be registered: a skill or command owns the name. */
+    /** `/herd` could not be registered: a skill or command owns the name. */
     command: string | null
   }
 
   interface PluginState {
-    fleet: {
+    herd: {
       /** The last refresh, this session's or another's; null before the first. */
-      snapshot: FleetSnapshot | null
+      snapshot: HerdSnapshot | null
       /** Ack keys of the run failures the person has seen. */
       acked: string[]
       /** The pane's open tab. */
-      tab: FleetTab
+      tab: HerdTab
       /** What Inbox found, null before it is pressed. */
-      inbox: FleetInboxEntry[] | null
+      inbox: HerdInboxEntry[] | null
       /** What the last button press said: the board URL, an accept, a ping. */
       notice: string | null
-      faults: FleetFaults
+      faults: HerdFaults
     }
   }
 }
