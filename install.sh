@@ -120,11 +120,18 @@ else
     link_repo_commands "$source_dir" "$target_dir"
 fi
 
-# --- shepherd CLI ---
+# --- shepherd and herd CLIs ---
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$repo_root/harnesses/shepherd/shepherd.py" "$HOME/.local/bin/shepherd"
+ln -sfn "$repo_root/harnesses/herd/herd.py" "$HOME/.local/bin/herd"
 echo
 echo "Linked: shepherd -> $HOME/.local/bin/shepherd"
+echo "Linked: herd -> $HOME/.local/bin/herd"
+herd_sources="${XDG_CONFIG_HOME:-$HOME/.config}/herd/sources.json"
+if [[ ! -e "$herd_sources" ]]; then
+    echo "  herd judges no headless runs until a sources file names them, e.g. this machine's preset:"
+    echo "    mkdir -p \"$(dirname "$herd_sources")\" && ln -s \"$repo_root/harnesses/herd/presets/sources.json\" \"$herd_sources\""
+fi
 
 # --- private skills (gitignored skills-amazon/: never in plugin.json) ---
 # Each subfolder with a SKILL.md becomes a user skill; its install.sh, if any,

@@ -10,17 +10,23 @@
     herd recap [since] [--json]              what you left open since your last workday
     herd recap --save-summary < topics.json  the recap skill's topics, for the Recap page
     herd resume <name> [--detach]            back into a session: claude --resume in tmux
+    herd runs [--json] [--sources FILE]      headless claude -p runs and cron logs, judged
+    herd snapshot [--sources FILE] …         tracks, sessions and runs in one JSON (the herd mod's)
+    herd ack KEY… | --failed                 mark run failures as seen
 
 Read-only over what Claude Code already writes: its session registry
 (~/.claude/sessions/<pid>.json), transcripts and workflow journals, plus shepherd's
-status and `git status` for the recap. No hooks and no state of its own beyond the
-dashboard's access token. Stdlib only, Python 3.9+.
+status, `git status` for the recap and the run logs a sources file names. No hooks; its
+own state is the dashboard's access token, the recap skill's last summary and the acked
+run failures. Stdlib only, Python 3.9+.
 See harnesses/herd/README.md."""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import errno
+import fcntl
 import http.client
 import json
 import math
@@ -35,6 +41,7 @@ import sys
 import threading
 import time
 from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -773,7 +780,7 @@ def sessions(detail: bool = False, extras: bool = True) -> list[dict]:
         state = STATES.get(status, status or "?")
         row = {
             "pid": e["pid"], "session_id": e["sessionId"], "name": name, "title": title,
-            "kind": e.get("kind") or "interactive", "state": state,
+            "kind": e.get("kind") or "interactive", "state": state, "status": status,
             "waiting_for": e.get("waitingFor") or "", "since": max(0, int(now - changed)),
             "state_changed_at": int(changed), "started_at": int(started),
             "cwd": cwd, "branch": git_branch(cwd, branches) if cwd and extras else "",
@@ -1418,18 +1425,48 @@ def ask_of(reply: str) -> str:
     return cut(paras[-1].replace("**", ""), ASK_CAP) if paras else ""
 
 
-def shepherd_board() -> dict:
-    """`shepherd status --all --json`: tracks, reviews and their local state in every enrolled
-    repo, or {} without shepherd. HERD_SHEPHERD names another binary; set empty, it is skipped."""
-    exe = os.environ.get("HERD_SHEPHERD", "shepherd")
-    if not exe or not shutil.which(exe):
-        return {}
+def shepherd_cmd() -> Optional[list[str]]:
+    """How to run shepherd: $HERD_SHEPHERD (set empty: not at all), else `shepherd` on PATH, else
+    the shepherd beside herd in this checkout; None when there is none."""
+    exe = os.environ.get("HERD_SHEPHERD")
+    if exe is not None:
+        found = shutil.which(exe) if exe else None
+        return [found] if found else None
+    found = shutil.which("shepherd")
+    if found:
+        return [found]
+    sibling = Path(__file__).resolve().parent.parent / "shepherd" / "shepherd.py"
+    return [sys.executable, str(sibling)] if sibling.is_file() else None
+
+
+def shepherd_read(timeout: float = 60) -> tuple[dict, Optional[str], bool]:
+    """`shepherd status --all --json` as (board, error, missing): tracks, reviews and their local
+    state in every enrolled repo. Missing: no shepherd to run; error: it ran and failed."""
+    cmd = shepherd_cmd()
+    if cmd is None:
+        return {}, None, True
+    # Its `git status` in every worktree takes no optional index lock, so a refresh never makes
+    # the person's own `git add` fail.
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     try:
-        r = subprocess.run([exe, "status", "--all", "--json"], capture_output=True, text=True, timeout=60)
-        board = json.loads(r.stdout) if r.returncode == 0 else {}
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return {}
-    return board if isinstance(board, dict) else {}
+        r = subprocess.run([*cmd, "status", "--all", "--json"], capture_output=True, text=True,
+                           timeout=timeout, env=env)
+    except FileNotFoundError:
+        return {}, None, True
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {}, f"shepherd status: {e}", False
+    if r.returncode != 0:
+        return {}, f"shepherd status exited {r.returncode}: {first_line_of(r.stderr or r.stdout, 140) or 'no output'}", False
+    try:
+        board = json.loads(r.stdout)
+    except ValueError:
+        return {}, f"shepherd status printed no JSON: {first_line_of(r.stdout, 100) or 'nothing'}", False
+    return (board, None, False) if isinstance(board, dict) else ({}, "not shepherd status JSON (no repos)", False)
+
+
+def shepherd_board() -> dict:
+    """shepherd_read's board, or {} without shepherd or when it fails."""
+    return shepherd_read()[0]
 
 
 def git_state(cwd: str, cache: dict) -> Optional[dict]:
@@ -1572,9 +1609,10 @@ def _when(ts: float, now: float, tz) -> str:
     return f"{d:%a %H:%M}" if (today - d.date()).days < 7 else f"{d:%d %b}"
 
 
-def recap(spec: Optional[str] = None, now: Optional[float] = None) -> dict:
+def recap(spec: Optional[str] = None, now: Optional[float] = None, board: Optional[dict] = None) -> dict:
     """The sessions you drove since `spec` (see recap_window), most in need of you first,
-    with the shepherd tracks none of them shows, and the short sessions folded away."""
+    with the shepherd tracks none of them shows, and the short sessions folded away.
+    `board` is shepherd's status when the caller has it already (shepherd's own dashboard)."""
     now = time.time() if now is None else now
     tz = recap_tz()
     files: dict = {}
@@ -1598,7 +1636,7 @@ def recap(spec: Optional[str] = None, now: Optional[float] = None) -> dict:
     start, label = recap_window(spec, now, tz, had_prompts)
     stories = stories_since(start)
     stories.update({sid: story(files[sid]) for sid in live if sid in files and sid not in stories})
-    board = shepherd_board()
+    board = shepherd_board() if board is None else board
     tracks = [(repo, t) for repo in board.get("repos") or [] for t in repo.get("tracks") or []]
     me, git_cache, shown = os.environ.get("CLAUDE_CODE_SESSION_ID"), {}, set()
     mine = {sid: [p for p in s["prompts"] if p["at"] >= start] for sid, s in stories.items()}
@@ -1905,6 +1943,882 @@ def summarize_status() -> dict:
         return _status()
 
 
+# --- headless runs -------------------------------------------------------------------
+# What unattended `claude -p --output-format stream-json` runs, and the text logs of the
+# cron jobs around them, say: each log judged on its own (ok, asked, denied, running,
+# quiet, unfinished, failed, no result, no line, late). Which logs, what a good line
+# looks like and how often a run is due come from a sources file (presets/README.md).
+# Ported from the fleet mod (mods/fleet/hooks/fleet.ts at 3aa5437), wording, rounding
+# and the patterns' JavaScript meaning included: tests/runs_golden.json holds what that
+# code said for the same inputs.
+
+HOUR_MS = 3_600_000
+RUN_MAX_AGE_HOURS = 192   # logs older than this are not shown
+RUN_RUNNING_MINUTES = 15  # a log with no verdict yet, written this recently, is a run still going
+RUN_LATEST = 12           # stream logs shown per source: the newest of each run name
+SNAPSHOT_SCHEMA = 3
+ACKED_MAX = 500
+LOG_CACHE_MAX = 400
+
+# JavaScript's whitespace: what String.prototype.trim strips and \s matches.
+_JS_WS = ("\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009"
+          "\u200a\u2028\u2029\u202f\u205f\u3000\ufeff")
+
+
+def _js_re(pattern: str, flags: int = 0) -> re.Pattern:
+    """A JavaScript RegExp (no u, m or s flag) as Python's: \\w, \\d and \\b ASCII-only, \\s
+    JavaScript's whitespace, `.` stopping at its line terminators, `$` at the very end only."""
+    out, i, in_class = [], 0, False
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\" and i + 1 < len(pattern):
+            esc = pattern[i + 1]
+            out.append(_JS_WS if esc == "s" and in_class else f"[{_JS_WS}]" if esc == "s"
+                       else f"[^{_JS_WS}]" if esc == "S" and not in_class else pattern[i:i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == ".":
+            c = "[^\n\r\u2028\u2029]"
+        elif c == "$":
+            c = r"\Z"
+        out.append(c)
+        i += 1
+    return re.compile("".join(out), re.ASCII | flags)
+
+
+def _trim(s: str) -> str:
+    return s.strip(_JS_WS)
+
+
+def _num(v) -> Optional[float]:
+    """A JSON number that is finite, as JavaScript sees one (a bool is not)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    try:
+        return v if math.isfinite(v) else None
+    except OverflowError:                       # an int too big for a double is Infinity there
+        return None
+
+
+def _count(v) -> int:
+    n = _num(v)
+    return max(0, math.floor(n)) if n is not None else 0
+
+
+def _text(v) -> Optional[str]:
+    return v if isinstance(v, str) and v != "" else None
+
+
+def _js_round(x: float) -> int:
+    """Math.round: halves go up (Python's round() goes to even)."""
+    r = math.floor(x)
+    return r + 1 if x - r >= 0.5 else r
+
+
+def _fixed2(x: float) -> str:
+    """Number.prototype.toFixed(2): the exact value, halves away from zero."""
+    return str(Decimal(x).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _u16(s: str) -> int:
+    """A string's JavaScript length: UTF-16 code units."""
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _u16_cut(s: str, n: int) -> str:
+    """JavaScript's s.slice(0, n): n UTF-16 code units, half a surrogate pair included."""
+    return s.encode("utf-16-le", "surrogatepass")[:2 * max(0, n)].decode("utf-16-le", "surrogatepass")
+
+
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def ago_ms(then_ms: float, now_ms: float) -> str:
+    """How long ago, in one short word: 40s, 12m, 5h, 3d."""
+    s = max(0, _js_round((now_ms - then_ms) / 1000))
+    return f"{s}s" if s < 60 else f"{s // 60}m" if s < 3600 else f"{s // 3600}h" if s < 86400 else f"{s // 86400}d"
+
+
+def first_line_of(text: str, n: int = 100) -> str:
+    """The first non-blank line of a message, cut to n characters."""
+    line = _trim(next((ln for ln in text.split("\n") if _trim(ln)), ""))
+    return _u16_cut(line, n - 1) + "…" if _u16(line) > n else line
+
+
+def last_line_of(text: str, n: int = 100) -> str:
+    """The last non-blank line of a message, cut to n characters."""
+    line = _trim(next((ln for ln in reversed(text.split("\n")) if _trim(ln)), ""))
+    return _u16_cut(line, n - 1) + "…" if _u16(line) > n else line
+
+
+def day_of(ms: float) -> str:
+    """A log's day as MM-DD, local time."""
+    return time.strftime("%m-%d", time.localtime(ms / 1000))
+
+
+def stamp_of(ms: float) -> str:
+    """A log's day and minute as MM-DD HH:MM, local time."""
+    return time.strftime("%m-%d %H:%M", time.localtime(ms / 1000))
+
+
+def _home() -> Optional[str]:
+    return os.environ.get("HOME") or str(Path.home())
+
+
+def expand_home(path: str, home: Optional[str]) -> str:
+    """`~` and `~/…` under HOME; anything else as given."""
+    if home is None or (path != "~" and not path.startswith("~/")):
+        return path
+    return home.rstrip("/") + path[1:]
+
+
+def _source_re(value, where: str, errors: list) -> Optional[re.Pattern]:
+    """A sources file's pattern: Python's re, searched in each trimmed line, \\w \\d \\b ASCII-only."""
+    src = _text(value)
+    if src is None:
+        return None
+    try:
+        return re.compile(src, re.ASCII)
+    except re.error as e:
+        errors.append(f"{where}: bad pattern {json.dumps(src, ensure_ascii=False)}: {e}")
+        return None
+
+
+def _positive(v, fallback: float) -> float:
+    n = _num(v)
+    return n if n is not None and n > 0 else fallback
+
+
+def _expect(v) -> Optional[float]:
+    n = _num(v)
+    return n if n is not None and n > 0 else None
+
+
+_NAMED_GLOB = _js_re(r"^([^=/~*?]+)=(.+)$")
+
+
+def sources_of(globs: list, file) -> dict:
+    """The run sources: bare globs or `Label=glob` (stream logs), and a sources file's `runs`
+    (stream logs) and `lines` (text logs judged by their last matching line). A malformed entry
+    is skipped and named in `errors`; the rest still load."""
+    runs, lines, errors = [], [], []
+
+    def run_of(label: str, glob: str, entry: dict) -> dict:
+        return {"label": label, "glob": glob,
+                "maxAgeHours": _positive(entry.get("maxAgeHours"), RUN_MAX_AGE_HOURS),
+                "runningMinutes": _positive(entry.get("runningMinutes"), RUN_RUNNING_MINUTES),
+                "latest": math.floor(_positive(entry.get("latest"), RUN_LATEST)),
+                "expectEveryHours": _expect(entry.get("expectEveryHours"))}
+
+    for raw in globs:
+        spec = _trim(raw)
+        if not spec:
+            continue
+        named = _NAMED_GLOB.search(spec)
+        runs.append(run_of(_trim(named.group(1)), _trim(named.group(2)), {}) if named else run_of("runs", spec, {}))
+    if file is None:
+        return {"runs": runs, "lines": lines, "errors": errors}
+    if not isinstance(file, dict):
+        return {"runs": runs, "lines": lines, "errors": [*errors, "sources file: not a JSON object"]}
+    for i, entry in enumerate(file.get("runs") if isinstance(file.get("runs"), list) else []):
+        label = _text(entry.get("label")) if isinstance(entry, dict) else None
+        glob = _text(entry.get("glob")) if isinstance(entry, dict) else None
+        if label is None or glob is None:
+            errors.append(f"sources file: runs[{i}] needs a label and a glob")
+            continue
+        runs.append(run_of(label, glob, entry))
+    for i, entry in enumerate(file.get("lines") if isinstance(file.get("lines"), list) else []):
+        ok_entry = isinstance(entry, dict)
+        label = _text(entry.get("label")) if ok_entry else None
+        glob = _text(entry.get("glob")) if ok_entry else None
+        match = _source_re(entry.get("match"), f"lines[{i}].match", errors) if ok_entry else None
+        if label is None or glob is None or match is None:
+            errors.append(f"sources file: lines[{i}] needs a label, a glob and a match pattern")
+            continue
+        start = _source_re(entry.get("start"), f"lines[{i}].start", errors)
+        ok = _source_re(entry.get("ok"), f"lines[{i}].ok", errors)
+        # A bad ok pattern must not turn every line ok, nor a bad start judge an older run.
+        if (_text(entry.get("start")) is not None and start is None) or (_text(entry.get("ok")) is not None and ok is None):
+            continue
+        lines.append({"label": label, "glob": glob, "match": match, "start": start, "ok": ok,
+                      "maxAgeHours": _positive(entry.get("maxAgeHours"), RUN_MAX_AGE_HOURS),
+                      "runningMinutes": _positive(entry.get("runningMinutes"), RUN_RUNNING_MINUTES),
+                      "latest": math.floor(_positive(entry.get("latest"), 1)),
+                      "expectEveryHours": _expect(entry.get("expectEveryHours"))})
+    return {"runs": runs, "lines": lines, "errors": errors}
+
+
+_GLOB_WILD = _js_re(r"[*?[\]]")
+_GLOB_SPECIAL = _js_re(r"[.+^${}()|[\]\\]")
+
+
+def glob_parts(glob: str, home: Optional[str]) -> tuple[str, re.Pattern]:
+    """A glob as the directory to list and a pattern for the names in it; ValueError when it
+    cannot be one: wildcards only in the file name, an absolute path or ~/."""
+    trimmed = _trim(glob)
+    if (trimmed == "~" or trimmed.startswith("~/")) and home is None:
+        raise ValueError(f"{glob}: ~ needs HOME")
+    path = expand_home(trimmed, home)
+    if not path.startswith("/"):
+        raise ValueError(f"{glob}: needs an absolute path or ~/")
+    cut_at = path.rfind("/")
+    folder, name = path[:cut_at] or "/", path[cut_at + 1:]
+    if _GLOB_WILD.search(folder):
+        raise ValueError(f"{glob}: wildcards only in the file name")
+    if not name:
+        raise ValueError(f"{glob}: names no file")
+    body = _GLOB_SPECIAL.sub(lambda m: "\\" + m.group(0), name).replace("*", "[^/]*").replace("?", "[^/]")
+    return folder, _js_re(f"^{body}$")
+
+
+# A trailing date after a separator (or alone): 2026-10-09 or 20261009, a time after it, then a
+# run counter for a second run that day (-2). A real calendar date only, so an epoch stamp or a
+# build number is not one.
+_DATED = _js_re(r"(?:^|[-_.])(?:19|20)\d{2}-?(?:0[1-9]|1[0-2])-?(?:0[1-9]|[12]\d|3[01])"
+                r"(?:[T_-]?\d{2}[:-]?\d{2}(?:[:-]?\d{2})?)?(?:[-_.]\d{1,3})?$")
+_EXT = _js_re(r"\.[^.]*$")
+
+
+def run_name_of(file_name: str) -> str:
+    """A log's run name: the file name without its extension and a trailing date."""
+    base = _EXT.sub("", file_name, count=1)
+    return _DATED.sub("", base, count=1) or base
+
+
+def pick_logs(files: list, pattern: re.Pattern, now_ms: float, max_age_hours: float, latest: int) -> list:
+    """The logs to show: the newest of each run name, no older than max_age_hours, newest first,
+    at most `latest`."""
+    seen, picked = set(), []
+    for f in sorted((f for f in files if pattern.search(f["name"])), key=lambda f: -f["mtimeMs"]):
+        name = run_name_of(f["name"])
+        if name in seen or now_ms - f["mtimeMs"] > max_age_hours * HOUR_MS:
+            continue
+        seen.add(name)
+        picked.append(f)
+        if len(picked) >= latest:
+            break
+    return picked
+
+
+# The line `claude -p` prints on stderr when it gives up waiting on background work.
+_TERMINATING = _js_re(r"Background tasks still running after \d+s?; terminating")
+# The events that decide a run, compact (as `claude -p` writes them) or spaced. A quote inside
+# a JSON string is escaped, so these spellings appear bare only as an event's own keys.
+_WANTED = _js_re(r'"(?:type|subtype)"\s*:\s*"(?:result|permission_denied|task_)')
+_STREAM_NEEDLES = (b'"result', b'"permission_denied', b'"task_', b"Background tasks still running after")
+
+# A result's last line saying, in the present, that the run itself still waits on background
+# work ("Now waiting for the deep-dive agent to finish"), not a third party ("the cron is
+# waiting for 2 jobs") nor the past ("I was waiting for the agent")...
+_WAITING_ON_WORK = _js_re(
+    r"(?:\b(?:I(?:'m| am)|we(?:'re| are))\s+(?:(?:still|now|currently|just)\s+)?|\b(?:now|still|currently)\s+"
+    r"|(?:^|[.;:!]\s*))waiting (?:for|on) (?:the |a |an |its |my |our |\d+ )?(?:[\w-]+ ){0,3}?(?:sub)?"
+    r"(?:agents?|tasks?|jobs?|workers?)\b", re.I)
+# ... but not one saying nothing waits any more, or that the work came back.
+_NOT_WAITING = _js_re(
+    r"(?:\b(?:no longer|not|never|stopped|done|finished|quit|nothing|nobody|no one|none)|n't)\s+(?:\w+\s+){0,2}"
+    r"waiting\b|\b(?:has|have|had)\s+(?:now\s+|since\s+|already\s+)?(?:returned|finished|completed|reported)\b",
+    re.I)
+# One of a numbered or lettered list ("1. Publish anyway", "(b) Skip"); one that reports what
+# was done ("2. Stock report refreshed", "3. ✅ Returns") is not a choice to make.
+_OPTION = _js_re(r"^(?:\d{1,2}[.)]|\(?[a-e]\))\s+(\S.*)$")
+_DONE_ITEM = _js_re(r"[✓✔✅]|\b(?:\w+ed|done|ok|complete|written|sent|built|run|up to date)[.!*`_\s]*$", re.I)
+# A question that picks between things on its own, or (with an `or`) asks the person to decide.
+_CHOICE = _js_re(r"\b(?:which|whether|choose|pick|prefer)\b", re.I)
+_DECIDE = _js_re(r"\b(?:should|shall) (?:I|we)\b|\bdo you want\b|\bwould you (?:rather|prefer)\b"
+                 r"|\bhow (?:should|do you want)\b", re.I)
+_OR = _js_re(r"\bor\b", re.I)
+# A closing offer or pleasantry once the job is done ("Want me to also email it?", "Anything
+# else?"), not a question the run needed answered.
+_OFFER = _js_re(r"\b(?:also|as well|too)\b|\b(?:would you like|want) me to\b|\bany (?:other |more |further )?"
+                r"(?:questions|concerns)\b|\banything else\b|\blet me know\b|\bif you(?:'d| would)? like\b", re.I)
+_QUESTION_END = _js_re(r"[*_`\s]+$")
+
+
+def is_asking(text: str) -> bool:
+    """Whether a result ends on a question the run needed answered (a heuristic): the last line
+    asks, and it picks between things, or follows two or more numbered options that read as
+    choices. A closing offer or pleasantry is not a question nobody answered."""
+    lines = [ln for ln in (_trim(x) for x in text.split("\n")) if ln]
+    question = _QUESTION_END.sub("", lines[-1] if lines else "", count=1)
+    if not question.endswith("?") or _OFFER.search(question):
+        return False
+    if _CHOICE.search(question) or (_OR.search(question) and _DECIDE.search(question)):
+        return True
+    options = [ln for ln in lines[-13:-1] if (m := _OPTION.search(ln)) and not _DONE_ITEM.search(m.group(1))]
+    return len(options) >= 2
+
+
+def _kills_of(value) -> tuple[int, int]:
+    """subagent_stats.killed as (killed, stopped): `parent` is the model's own TaskStop, every
+    other key (`system`, `user`, one a later build adds) a stop the run did not choose; a bare
+    number is all kills."""
+    if isinstance(value, dict):
+        return sum(_count(v) for who, v in value.items() if who != "parent"), _count(value.get("parent"))
+    return _count(value), 0
+
+
+def fresh_facts() -> dict:
+    return {"last": None, "results": 0, "turns": 0, "cost": None, "denied_in_results": 0,
+            "denial_events": 0, "terminated": False, "background": {}, "ended": {}}
+
+
+def _reject_constant(name: str):
+    raise ValueError(name)                      # NaN and Infinity are not JSON to JavaScript
+
+
+def fact_line(line: str, acc: dict) -> None:
+    """Folds one log line into acc: every `result` event, `permission_denied` events, the task
+    events, and stderr's `terminating` line (2>&1); anything else is skipped unparsed."""
+    s = _trim(line)
+    if not s:
+        return
+    if not s.startswith("{"):
+        acc["terminated"] = acc["terminated"] or bool(_TERMINATING.search(s))
+        return
+    if not _WANTED.search(s):
+        return
+    try:
+        ev = json.loads(s, parse_constant=_reject_constant)
+    except ValueError:
+        return
+    if not isinstance(ev, dict):
+        return
+    task = _text(ev.get("task_id"))
+    if ev.get("type") == "result":
+        acc["last"] = {"subtype": ev.get("subtype"), "is_error": ev.get("is_error"),
+                       "terminal_reason": ev.get("terminal_reason"), "errors": ev.get("errors"),
+                       "result": ev.get("result"), "subagent_stats": ev.get("subagent_stats")}
+        acc["results"] += 1
+        acc["turns"] += _count(ev.get("num_turns"))
+        cost = _num(ev.get("total_cost_usd"))
+        if cost is not None:                    # unknown stays unknown: no cost shows none, not ≈$0.00
+            acc["cost"] = max(acc["cost"] if acc["cost"] is not None else 0, cost)
+        denials = ev.get("permission_denials")
+        acc["denied_in_results"] += len(denials) if isinstance(denials, list) else 0
+        return
+    if ev.get("type") != "system":
+        return
+    sub = ev.get("subtype")
+    if sub == "permission_denied":
+        acc["denial_events"] += 1
+        return
+    if task is None:
+        return
+    patch = ev.get("patch")
+    status = ev.get("status") if sub == "task_notification" else \
+        patch.get("status") if sub == "task_updated" and isinstance(patch, dict) else None
+    if sub == "task_started" and ev.get("is_backgrounded") is True and ev.get("task_type") == "local_agent":
+        acc["background"][task] = True
+    elif status in ("completed", "failed"):
+        acc["ended"][task] = status             # the last word on a task wins: a kill then its notice is one kill
+    elif status in ("killed", "stopped"):
+        acc["ended"][task] = "killed"
+
+
+def facts_of(acc: dict) -> dict:
+    """What a folded log says: its last result, the counts, and how its subagents ended (the last
+    result's subagent_stats, foreground and background; `tasks` counts background ones from the
+    task events, every stop as a kill since they do not say whose)."""
+    last = acc["last"]
+    stats = last.get("subagent_stats") if last else None
+    stats = stats if isinstance(stats, dict) else None
+    bg = list(acc["background"])
+
+    def ended(end: str) -> int:
+        return sum(1 for t in bg if acc["ended"].get(t) == end)
+
+    killed, stopped = _kills_of(stats.get("killed") if stats else None)
+    errors = last.get("errors") if last else None
+    return {
+        "results": acc["results"],
+        "last": None if last is None else {
+            "subtype": _text(last["subtype"]) or "?", "isError": last["is_error"] is True,
+            "terminal": _text(last["terminal_reason"]),
+            "errors": [e for e in errors if isinstance(e, str)] if isinstance(errors, list) else [],
+            "text": last["result"] if isinstance(last["result"], str) else ""},
+        "turns": acc["turns"], "cost": acc["cost"],
+        "denied": max(acc["denied_in_results"], acc["denial_events"]),
+        # `spawned` counts every subagent; an older build wrote only the background count.
+        "stats": None if stats is None else {
+            "spawned": _count(stats.get("started_in_background")) if _num(stats.get("spawned")) is None
+            else _count(stats.get("spawned")),
+            "completed": _count(stats.get("completed")), "failed": _count(stats.get("failed")),
+            "killed": killed, "stopped": stopped},
+        "tasks": {"spawned": len(bg), "completed": ended("completed"), "failed": ended("failed"),
+                  "killed": ended("killed"), "stopped": 0},
+        "isTerminated": acc["terminated"],
+    }
+
+
+def facts_of_stream(text: str) -> dict:
+    """facts_of a whole stream-json log at once."""
+    acc = fresh_facts()
+    for line in text.split("\n"):
+        fact_line(line, acc)
+    return facts_of(acc)
+
+
+def subagents_of(f: dict) -> dict:
+    """The subagents a run left behind: from subagent_stats, else from the task events."""
+    c = f["stats"] or f["tasks"]
+    return {**c, "pending": max(0, c["spawned"] - c["completed"] - c["failed"] - c["killed"] - c["stopped"])}
+
+
+def _verdict(verdict: str, tone: str, why: str, detail: str = "") -> dict:
+    return {"verdict": verdict, "tone": tone, "why": why, "detail": detail}
+
+
+def verdict_of_stream(f: dict, mtime_ms: float, now_ms: float, running_minutes: float) -> dict:
+    """One headless run, judged from its facts. Unfinished when a subagent was left running,
+    failed or was killed (by anything but the model's own TaskStop), or the run said it
+    terminated background work, even though the run reported success; asked when its last word
+    is a question nobody will answer. No result and a recent write is a run still going."""
+    running_ms = running_minutes * 60_000
+    age_ms = now_ms - mtime_ms
+    recent = age_ms < running_ms
+    if f["last"] is None:
+        since = f"last write {ago_ms(mtime_ms, now_ms)} ago" + (f" · {f['denied']} denied" if f["denied"] > 0 else "")
+        if f["isTerminated"]:
+            return _verdict("no result", "fail", "no result: background work terminated", since)
+        if recent:
+            return _verdict("running", "busy", f"running, last write {ago_ms(mtime_ms, now_ms)} ago", "no result event yet")
+        # A run blocked on one long, silent tool call writes nothing either: a warning before a failure.
+        if age_ms < 2 * running_ms:
+            return _verdict("quiet", "warn", f"no result, no write for {ago_ms(mtime_ms, now_ms)}: "
+                                             "a long tool call, or dead", since)
+        return _verdict("no result", "fail", "no result event: killed or crashed", since)
+    last = f["last"]
+    sub = subagents_of(f)
+    settled = last["terminal"] is None or last["terminal"] == "completed"
+    detail = " · ".join(x for x in (
+        last["subtype"], plural(f["turns"], "turn"),
+        None if f["cost"] is None else f"≈${_fixed2(f['cost'])}",
+        f"{f['denied']} denied",
+        f"subagents {sub['completed']}/{sub['spawned']} done" if sub["spawned"] > 0 else None,
+        f"{sub['failed']} failed" if sub["failed"] > 0 else None,
+        f"{sub['killed']} killed" if sub["killed"] > 0 else None,
+        f"{sub['stopped']} stopped by the model" if sub["stopped"] > 0 else None,
+        None if settled else last["terminal"],
+        f"{f['results']} results" if f["results"] > 1 else None) if x is not None)
+    if last["isError"] or last["subtype"] != "success" or not settled:
+        reason = last["errors"][0] if last["errors"] else (
+            last["subtype"] if last["subtype"] != "success" else last["terminal"]
+            if not settled and last["terminal"] is not None else "is_error")
+        return _verdict("failed", "fail", f"failed: {first_line_of(reason, 80)}", detail)
+    # The run answered and still waits on its background work: not over yet.
+    if sub["pending"] > 0 and sub["killed"] == 0 and sub["failed"] == 0 and not f["isTerminated"] and recent:
+        return _verdict("running", "busy", f"waiting on {plural(sub['pending'], 'background subagent')}", detail)
+    if sub["pending"] > 0 or sub["failed"] > 0 or sub["killed"] > 0 or f["isTerminated"]:
+        parts = [x for x in (
+            f"{sub['pending']} of {plural(sub['spawned'], 'subagent')} not finished" if sub["pending"] > 0 else None,
+            f"{plural(sub['failed'], 'subagent')} failed" if sub["failed"] > 0 else None,
+            f"{plural(sub['killed'], 'subagent')} killed" if sub["killed"] > 0 else None,
+            "background work terminated" if f["isTerminated"] and sub["killed"] == 0 else None) if x is not None]
+        return _verdict("unfinished", "fail", f"unfinished: {', '.join(parts)}", detail)
+    text = last["text"]
+    final = last_line_of(text, 400)
+    # No subagent_stats and no task events to go by: the result's own words are the fallback.
+    if f["stats"] is None and f["tasks"]["spawned"] == 0 and _WAITING_ON_WORK.search(final) \
+            and not _NOT_WAITING.search(final):
+        return _verdict("unfinished", "fail", f"unfinished: says {json.dumps(last_line_of(text, 60), ensure_ascii=False)}",
+                        detail)
+    if is_asking(text):
+        return _verdict("asked", "warn", f"ended on a question: {last_line_of(text, 70)}", detail)
+    if f["denied"] > 0:
+        return _verdict("denied", "warn", plural(f["denied"], "permission denial"), detail)
+    return _verdict("ok", "ok", "ok", detail)
+
+
+def _js_source(p: Optional[re.Pattern]) -> str:
+    """A pattern as JavaScript's RegExp.prototype.source spells it (the verdicts quote it)."""
+    src = p.pattern if p is not None else ""
+    return re.sub(r"(?<!\\)/", r"\/", src).replace("\n", r"\n") or "(?:)"
+
+
+def fresh_line(start: Optional[re.Pattern]) -> dict:
+    return {"line": None, "hasStart": start is None}
+
+
+def line_fold(match: re.Pattern, start: Optional[re.Pattern]):
+    """The fold that finds a text log's verdict line: the last line matching `match` after the
+    last line matching `start` (with no start, anywhere). The start line itself never counts."""
+    def fold(line: str, acc: dict) -> None:
+        s = _trim(line)
+        if not s:
+            return
+        if start is not None and start.search(s):
+            acc["line"], acc["hasStart"] = None, True
+        elif acc["hasStart"] and match.search(s):
+            acc["line"] = s
+    return fold
+
+
+def last_match_of(text: str, match: re.Pattern, start: Optional[re.Pattern] = None) -> dict:
+    acc, fold = fresh_line(start), line_fold(match, start)
+    for line in text.split("\n"):
+        fold(line, acc)
+    return acc
+
+
+def verdict_of_line(found: dict, match: re.Pattern, start: Optional[re.Pattern], ok: Optional[re.Pattern],
+                    mtime_ms: float, now_ms: float, running_minutes: float) -> dict:
+    """A text log by its verdict line: ok when it matches `ok` (or none is set), failed when not;
+    none yet is running while the log is fresh, a warning after."""
+    if found["line"] is not None:
+        good = ok is None or bool(ok.search(found["line"]))
+        return _verdict("ok" if good else "failed", "ok" if good else "fail", first_line_of(found["line"], 120))
+    if now_ms - mtime_ms < running_minutes * 60_000:
+        return _verdict("running", "busy", f"running, last write {ago_ms(mtime_ms, now_ms)} ago")
+    if start is None:
+        why = f"no line matching /{_js_source(match)}/"
+    elif found["hasStart"]:
+        why = f"no line matching /{_js_source(match)}/ after the last run start"
+    else:
+        why = f"no run start matching /{_js_source(start)}/"
+    return _verdict("no line", "warn", why)
+
+
+def verdict_of_lines(text: str, match: re.Pattern, ok: Optional[re.Pattern], mtime_ms: float, now_ms: float,
+                     running_minutes: float, start: Optional[re.Pattern] = None) -> dict:
+    return verdict_of_line(last_match_of(text, match, start), match, start, ok, mtime_ms, now_ms, running_minutes)
+
+
+def late_run(source: str, glob: str, kind: str, newest_ms: Optional[float], now_ms: float,
+             expect_every_hours: Optional[float]) -> Optional[dict]:
+    """The failure a source raises when its newest log is older than it should be; keyed by
+    label and glob, so two sources never share one."""
+    if expect_every_hours is None or (newest_ms is not None and now_ms - newest_ms <= expect_every_hours * HOUR_MS):
+        return None
+    hours = int(expect_every_hours) if float(expect_every_hours).is_integer() else expect_every_hours
+    why = f"no {'log' if kind == 'line' else 'run'} found" if newest_ms is None else \
+        f"no run for {ago_ms(newest_ms, now_ms)} (expected every {hours}h)"
+    return {"key": f"{source}@late@{glob}@{newest_ms if newest_ms is not None else 0}", "source": source,
+            "kind": "late", "name": source, "path": "", "size": 0, "mtimeMs": newest_ms if newest_ms is not None else 0,
+            **_verdict("late", "fail", why), "facts": None}
+
+
+_log_cache: dict = {}
+
+
+def fold_log(path: str, key, needles: tuple, fresh, fold):
+    """fold(line, acc) over each line of a log that holds one of `needles` (bytes; none: every
+    line), once per version of the file. A log that grew is read from where the last read
+    stopped; one rewritten in place (the bytes before that point changed) or replaced is read
+    again. A last line with no newline yet counts now and is read again once it is whole."""
+    st = os.stat(path)
+    stamp = (st.st_ino, st.st_size, st.st_mtime_ns)
+    hit = _log_cache.get(key)
+    if hit and hit["stamp"] == stamp:
+        return hit["view"]
+    with open(path, "rb") as f:
+        pos, acc = 0, None
+        if hit and hit["stamp"][0] == st.st_ino and hit["pos"] <= st.st_size:
+            f.seek(max(0, hit["pos"] - 64))
+            if f.read(min(64, hit["pos"])) == hit["sig"]:
+                pos, acc = hit["pos"], hit["acc"]
+        acc = fresh() if acc is None else acc
+        f.seek(pos)
+        carry, left = b"", st.st_size - pos
+        while left > 0:
+            chunk = f.read(min(BLOCK, left))
+            if not chunk:
+                break
+            left -= len(chunk)
+            data = carry + chunk
+            end = data.rfind(b"\n") + 1
+            for ln in data[:end].split(b"\n")[:-1] if end else []:
+                if not needles or any(n in ln for n in needles):
+                    fold(ln.decode("utf-8", "replace"), acc)
+            pos += end
+            carry = data[end:]
+        f.seek(max(0, pos - 64))
+        sig = f.read(min(64, pos))
+    view = acc
+    if carry and (not needles or any(n in carry for n in needles)):
+        view = copy.deepcopy(acc)
+        fold(carry.decode("utf-8", "replace"), view)
+    _log_cache.pop(key, None)
+    _log_cache[key] = {"stamp": stamp, "pos": pos, "sig": sig, "acc": acc, "view": view}
+    while len(_log_cache) > LOG_CACHE_MAX:
+        _log_cache.pop(next(iter(_log_cache)))
+    return view
+
+
+def _error_text(e: BaseException) -> str:
+    if isinstance(e, OSError) and e.strerror:
+        return f"{e.strerror}: {e.filename}" if e.filename else e.strerror
+    return first_line_of(str(e), 160) or type(e).__name__
+
+
+def _logs_of(glob: str, home: Optional[str]) -> tuple[str, list]:
+    """The files one glob names: name, path, size and mtime (ms) of each."""
+    folder, pattern = glob_parts(glob, home)
+    files = []
+    with os.scandir(folder) as it:
+        for e in it:
+            try:
+                if not pattern.search(e.name) or not e.is_file():
+                    continue
+                st = e.stat()
+            except OSError:
+                continue
+            files.append({"name": e.name, "path": os.path.join(folder, e.name), "size": st.st_size,
+                          "mtimeMs": st.st_mtime_ns // 1_000_000})
+    files.sort(key=lambda f: f["name"])
+    return folder, files
+
+
+def _run_of(source: str, kind: str, f: dict, v: dict, facts: Optional[dict] = None) -> dict:
+    return {"key": f"{f['path']}@{f['mtimeMs']}", "source": source, "kind": kind, "name": run_name_of(f["name"]),
+            "path": f["path"], "size": f["size"], "mtimeMs": f["mtimeMs"], **v, "facts": facts}
+
+
+def _facts_row(f: dict) -> dict:
+    """The numbers the Runs view shows for a stream run."""
+    return {"results": f["results"], "turns": f["turns"], "cost": f["cost"], "denied": f["denied"],
+            "subagents": subagents_of(f)}
+
+
+def _read_source(s: dict, kind: str, home: Optional[str], now_ms: float) -> tuple[list, dict]:
+    source = {"label": s["label"], "kind": kind, "glob": s["glob"], "error": None, "count": 0}
+    runs = []
+    try:
+        _, files = _logs_of(s["glob"], home)
+    except (OSError, ValueError) as e:
+        source["error"] = _error_text(e)
+        return runs, source
+    for f in pick_logs(files, re.compile(""), now_ms, s["maxAgeHours"], s["latest"]):
+        try:
+            if kind == "stream":
+                facts = facts_of(fold_log(f["path"], (f["path"], "stream"), _STREAM_NEEDLES, fresh_facts, fact_line))
+                runs.append(_run_of(s["label"], kind, f, verdict_of_stream(facts, f["mtimeMs"], now_ms,
+                                                                          s["runningMinutes"]), _facts_row(facts)))
+            else:
+                key = (f["path"], "line", s["match"].pattern, s["start"].pattern if s["start"] else None)
+                found = fold_log(f["path"], key, (), lambda: fresh_line(s["start"]), line_fold(s["match"], s["start"]))
+                runs.append(_run_of(s["label"], kind, f, verdict_of_line(found, s["match"], s["start"], s["ok"],
+                                                                        f["mtimeMs"], now_ms, s["runningMinutes"])))
+        except OSError as e:
+            runs.append(_run_of(s["label"], kind, f, _verdict("unreadable", "warn", f"unreadable: {_error_text(e)}")))
+    source["count"] = len(files)
+    late = late_run(s["label"], s["glob"], kind, max((f["mtimeMs"] for f in files), default=None), now_ms,
+                    s["expectEveryHours"])
+    if late is not None:
+        runs.append(late)
+    return runs, source
+
+
+def config_dir() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "herd"
+
+
+def sources_path(arg: Optional[str] = None) -> Optional[str]:
+    """The sources file to read: --sources, else $HERD_SOURCES (set empty: none), else
+    ~/.config/herd/sources.json when it exists. Never the preset by itself: on another machine
+    its schedules would all read late."""
+    if arg:
+        return arg
+    env = os.environ.get("HERD_SOURCES")
+    if env is not None:
+        return env or None
+    default = config_dir() / "sources.json"
+    return str(default) if default.exists() else None
+
+
+def read_runs(path: Optional[str] = None, now_ms: Optional[float] = None, home: Optional[str] = None) -> dict:
+    """Every run source the sources file names, read and judged. Never raises for a source:
+    each carries its own error, and a log two sources name is one run."""
+    now_ms = time.time() * 1000 if now_ms is None else now_ms
+    home = _home() if home is None else home
+    data, file_error = None, None
+    if path:
+        try:
+            data = json.loads(Path(expand_home(path, home)).read_text())
+        except (OSError, ValueError) as e:
+            file_error = f"sources file {path}: {_error_text(e)}"
+    parsed = sources_of([], data)
+    runs, sources, seen = [], [], set()
+    for kind, entries in (("stream", parsed["runs"]), ("line", parsed["lines"])):
+        for s in entries:
+            got, source = _read_source(s, kind, home, now_ms)
+            runs += [r for r in got if not (r["key"] in seen or seen.add(r["key"]))]
+            sources.append(source)
+    errors = [e for e in (file_error, *parsed["errors"]) if e]
+    return {"runs": runs, "sources": sources, "sourcesFile": path, "sourcesError": "; ".join(errors) or None}
+
+
+def acked_path() -> Path:
+    return state_dir() / "acked.json"
+
+
+def acked() -> list[str]:
+    """The run failures the person has seen (run keys, oldest first): shown as warnings, not
+    failures, until the log changes."""
+    got = read_json(acked_path())
+    keys = got.get("keys") if isinstance(got, dict) else None
+    return [k for k in keys if isinstance(k, str)][-ACKED_MAX:] if isinstance(keys, list) else []
+
+
+def ack(keys: list) -> list[str]:
+    """Adds run keys to the acked list, under a lock (every session's band acks through here),
+    keeping the newest ACKED_MAX; returns the list."""
+    path = acked_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    with open(path.with_suffix(".lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        new = [k for k in dict.fromkeys(keys) if isinstance(k, str) and k]
+        keep = [k for k in acked() if k not in new] + new
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"keys": keep[-ACKED_MAX:]}, f, indent=1)
+        os.replace(tmp, path)                   # a reader never sees half a file
+    return keep[-ACKED_MAX:]
+
+
+def _ms_of_seconds(v) -> Optional[float]:
+    n = _num(v)
+    return None if n is None else n * 1000
+
+
+def tracks_of(status, now_ms: float, stale_ms: float) -> tuple[list, list]:
+    """shepherd's tracks, flat, each with its repo; ValueError on JSON that is not shepherd's."""
+    if not isinstance(status, dict) or not isinstance(status.get("repos"), list):
+        raise ValueError("not shepherd status JSON (no repos)")
+    repos, tracks = [], []
+    for repo in status["repos"]:
+        if not isinstance(repo, dict):
+            continue
+        repo_name = _text(repo.get("name")) or "?"
+        overlaps = [o for o in repo.get("overlaps") or [] if isinstance(o, dict)] \
+            if isinstance(repo.get("overlaps"), list) else []
+        repos.append({"name": repo_name, "primary": _text(repo.get("primary")) or ""})
+        for t in repo.get("tracks") if isinstance(repo.get("tracks"), list) else []:
+            if not isinstance(t, dict):
+                continue
+            name, state = _text(t.get("name")) or "?", _text(t.get("status")) or "unknown"
+            agent = t.get("agent") if isinstance(t.get("agent"), dict) else {}
+            review = t.get("review") if isinstance(t.get("review"), dict) else None
+            live = agent.get("live") is True
+            last = _ms_of_seconds(t.get("last_activity"))
+            # A merge-tree verdict is a list of files: empty is clean, null unknown.
+            conflicts = sum(1 for o in overlaps if name in (o.get("a"), o.get("b"))
+                            and isinstance(o.get("conflicts"), list) and o["conflicts"])
+            rid = None if review is None else _text(review.get("id")) or (
+                None if _num(review.get("id")) is None else _js_number(review["id"]))
+            tracks.append({
+                "repo": repo_name, "name": name, "status": state, "goal": _text(t.get("goal")),
+                "sessionId": _text(agent.get("session_id")), "owner": _text(agent.get("status")), "isLive": live,
+                "reviewId": rid, "reviewState": None if review is None else _text(review.get("state")),
+                "checks": None if review is None else _text(review.get("checks")),
+                "checkedAt": None if review is None else _ms_of_seconds(review.get("checked_at")),
+                "reviewUrl": None if review is None else _text(review.get("url")),
+                "lastActivity": last,
+                "warnings": [w for w in t.get("warnings") or [] if isinstance(w, str)]
+                if isinstance(t.get("warnings"), list) else [],
+                "conflicts": conflicts, "isBlocked": False, "waitingFor": None,
+                "isStale": state == "active" and (not live or (last is not None and now_ms - last > stale_ms))})
+    return repos, tracks
+
+
+def _js_number(n) -> str:
+    """String(n) for a JSON number: 6 not 6.0."""
+    return str(int(n)) if isinstance(n, float) and n.is_integer() and abs(n) < 1e21 else str(n)
+
+
+def snapshot_sessions() -> list[dict]:
+    """The live sessions (herd's list) in the snapshot's shape."""
+    return [{"sessionId": r["session_id"], "shortId": None, "name": r["name"] or None,
+             "kind": "background" if r["kind"] == "bg" else r["kind"], "state": r["state"],
+             "status": r["status"] or None, "waitingFor": r["waiting_for"] or None,
+             "startedAt": r["started_at"] * 1000 or None, "cwd": r["cwd"] or None, "isLive": True,
+             "isBlocked": r["state"] == "blocked", "track": None} for r in sessions(extras=False)]
+
+
+def joined(tracks: list, rows: list) -> tuple[list, list]:
+    """Marks each track whose owner waits on the person, and each session with the track it owns."""
+    by_id = {s["sessionId"]: s for s in rows}
+    owned = {}
+    out = []
+    for t in tracks:
+        s = by_id.get(t["sessionId"]) if t["sessionId"] is not None else None
+        if s is not None and t["status"] not in ("paused", "merged"):
+            owned[t["sessionId"]] = f"{t['repo']}/{t['name']}"
+        out.append(t if s is None else {**t, "isBlocked": s["isBlocked"], "waitingFor": s["waitingFor"]})
+    return out, [{**s, "track": owned.get(s["sessionId"])} for s in rows]
+
+
+def snapshot(sources: Optional[str] = None, with_tracks: bool = True, with_sessions: bool = True,
+             stale_hours: float = 24, board: Optional[dict] = None) -> dict:
+    """One read of everything that may need the person: shepherd's tracks, the live sessions and
+    the headless runs, joined. Each part fails on its own and says so; the rest still shows.
+    The shape is the herd mod's (camelCase, ms): it draws it as is."""
+    started = time.time() * 1000
+    repos, tracks, t_error, t_missing = [], [], None, False
+    if with_tracks:
+        if board is None:
+            board, t_error, t_missing = shepherd_read(timeout=20)
+        if t_error is None and not t_missing:
+            try:
+                repos, tracks = tracks_of(board, started, max(1, stale_hours) * HOUR_MS)
+            except ValueError as e:
+                t_error = str(e)
+    rows, s_error = [], None
+    if with_sessions:
+        try:
+            rows = snapshot_sessions()
+        except Exception as e:                  # each part fails on its own
+            s_error = _error_text(e)
+    tracks, rows = joined(tracks, rows)
+    rr = read_runs(sources, started)
+    keys = set(acked())
+    done = time.time() * 1000
+    return {"schema": SNAPSHOT_SCHEMA, "at": int(done), "tookMs": max(0, int(done - started)),
+            "host": socket.gethostname(),
+            "tracksOn": with_tracks, "repos": repos, "tracks": tracks, "tracksError": t_error,
+            "tracksMissing": t_missing,
+            "sessionsOn": with_sessions, "sessions": rows, "sessionsError": s_error, "sessionsMissing": False,
+            "runs": rr["runs"], "sources": rr["sources"], "sourcesFile": rr["sourcesFile"],
+            "sourcesError": rr["sourcesError"], "acked": [r["key"] for r in rr["runs"] if r["key"] in keys]}
+
+
+TONE = {"fail": "1;31", "warn": "33", "busy": "36", "ok": "32", "dim": "2"}
+
+
+def render_runs(rr: dict, acked_keys: set, width: int, color: bool) -> str:
+    paint = (lambda code, s: f"\x1b[{code}m{s}\x1b[0m") if color else (lambda code, s: s)
+    if not rr["sources"] and not rr["sourcesError"]:
+        return ("no run sources: name a sources file with --sources, $HERD_SOURCES or "
+                f"{config_dir() / 'sources.json'} (example: harnesses/herd/presets/sources.json)\n")
+    out = [paint("2", f"{'SOURCE':12} {'RUN':28} {'WHEN':11}  {'VERDICT':11} WHY")]
+    for r in rr["runs"]:
+        seen = r["tone"] == "fail" and r["key"] in acked_keys
+        tone = "warn" if seen else r["tone"]
+        when = stamp_of(r["mtimeMs"]) if r["mtimeMs"] > 0 and r["kind"] != "late" else "-"
+        name = "schedule" if r["kind"] == "late" else r["name"]
+        head = f"{cut(r['source'], 12):12} {cut(name, 28):28} {when:11}  "
+        why = ("acked · " if seen else "") + r["why"]
+        out.append(head + paint(TONE.get(tone, "0"), f"{r['verdict']:11}") + " " + cut(why, max(20, width - len(head) - 12)))
+        if r["detail"]:
+            out.append(paint("2", " " * 13 + cut(r["detail"], max(20, width - 13))))
+    for s in rr["sources"]:
+        if s["error"]:
+            out.append(paint(TONE["warn"], f"{s['label']}: {s['glob']}: {s['error']}"))
+    if rr["sourcesError"]:
+        out.append(paint(TONE["warn"], rr["sourcesError"]))
+    fails = [r for r in rr["runs"] if r["tone"] == "fail" and r["key"] not in acked_keys]
+    if fails:
+        out.append(paint("2", f"{plural(len(fails), 'failure')} not acked: herd ack --failed once you have looked"))
+    return "\n".join(out) + "\n"
+
+
 # --- commands ------------------------------------------------------------------------
 
 def cmd_ls(args) -> int:
@@ -2117,6 +3031,37 @@ def cmd_recap(args) -> int:
         return 0
     color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     sys.stdout.write(render_recap(rc, shutil.get_terminal_size((160, 24)).columns, color))
+    return 0
+
+
+def cmd_runs(args) -> int:
+    rr = read_runs(sources_path(args.sources))
+    keys = set(acked())
+    if args.json:
+        print(json.dumps({**rr, "acked": [r["key"] for r in rr["runs"] if r["key"] in keys]}, indent=2))
+        return 0
+    color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    sys.stdout.write(render_runs(rr, keys, shutil.get_terminal_size((160, 24)).columns, color))
+    return 0
+
+
+def cmd_snapshot(args) -> int:
+    snap = snapshot(sources_path(args.sources), with_tracks=not args.no_tracks,
+                    with_sessions=not args.no_sessions, stale_hours=args.stale_hours)
+    print(json.dumps(snap, separators=(",", ":")))
+    return 0
+
+
+def cmd_ack(args) -> int:
+    if args.failed == bool(args.keys):
+        print("herd: ack takes run keys (herd runs --json) or --failed", file=sys.stderr)
+        return 2
+    keys = args.keys
+    if args.failed:
+        keys = [r["key"] for r in read_runs(sources_path(args.sources))["runs"] if r["tone"] == "fail"]
+    if keys:
+        ack(keys)
+    print(f"acked {plural(len(keys), 'run')}" + ("" if keys else ": no failure to ack"))
     return 0
 
 
@@ -2360,6 +3305,21 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("resume", help="back into a session, ended or not: claude --resume in tmux, or herd go")
     p.add_argument("name", help="a session id prefix (as the Recap page copies it), name or title")
     p.add_argument("--detach", action="store_true", help="start it in tmux without attaching")
+    sources_help = "the sources file (default: $HERD_SOURCES, else ~/.config/herd/sources.json)"
+    p = sub.add_parser("runs", help="headless claude -p runs and cron logs, each judged: ok, asked, unfinished…")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--sources", help=sources_help)
+    p = sub.add_parser("snapshot", help="tracks, sessions and runs in one JSON, as the herd mod draws them")
+    p.add_argument("--json", action="store_true", help="the default; the only format")
+    p.add_argument("--sources", help=sources_help)
+    p.add_argument("--no-tracks", action="store_true", help="skip shepherd")
+    p.add_argument("--no-sessions", action="store_true", help="skip the session list")
+    p.add_argument("--stale-hours", type=float, default=24.0,
+                   help="an active track nobody touched this long is stale (default 24)")
+    p = sub.add_parser("ack", help="mark run failures as seen: a warning, not a failure, until the log changes")
+    p.add_argument("keys", nargs="*", help="run keys, as herd runs --json and herd snapshot list them")
+    p.add_argument("--failed", action="store_true", help="every run failing now")
+    p.add_argument("--sources", help=sources_help)
     if not argv or argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
         argv = ["ls", *argv]
     extra: list[str] = []
@@ -2369,7 +3329,8 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     args.claude_args = extra
     return {"ls": cmd_ls, "watch": cmd_watch, "new": cmd_new, "go": cmd_go,
-            "serve": cmd_serve, "url": cmd_url, "recap": cmd_recap, "resume": cmd_resume}[args.cmd](args)
+            "serve": cmd_serve, "url": cmd_url, "recap": cmd_recap, "resume": cmd_resume,
+            "runs": cmd_runs, "snapshot": cmd_snapshot, "ack": cmd_ack}[args.cmd](args)
 
 
 if __name__ == "__main__":

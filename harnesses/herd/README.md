@@ -2,7 +2,9 @@
 
 herd answers one question: **which of my Claude Code sessions needs me right now?** It lists every live session on the machine — blocked ones first, then the ones that finished their turn, then the ones still working — with what each was last asked and where it runs. `herd serve` shows the same thing as a local web dashboard, with each session's workflows and subagents underneath, and a graph view of what every session started and who messaged whom. `herd recap` answers the morning question, **what did I leave open?**, for sessions that have ended too. It can also start sessions inside tmux so they survive a dropped SSH connection, and jump you into one.
 
-It is the light sibling of [shepherd](../shepherd/README.md): no tracks, no reviews, no hooks and no daemon. It only reads what Claude Code already writes (and, for the recap, what shepherd and `git status` report); all it keeps is the dashboard's access token and the recap skill's last summary. Stdlib only, Python 3.9+, Linux.
+`herd runs` answers the one about unattended work: **did my headless `claude -p` runs and cron jobs really finish?** `herd snapshot` puts tracks, sessions and runs in one JSON for the herd mod's band above the prompt.
+
+It is the light sibling of [shepherd](../shepherd/README.md): no tracks, no reviews, no hooks and no daemon. It only reads what Claude Code already writes, plus what shepherd and `git status` report and the run logs a sources file names. All it keeps is the dashboard's access token, the recap skill's last summary and the run failures you acked. Stdlib only, Python 3.9+, Linux.
 
 ```mermaid
 flowchart LR
@@ -14,7 +16,8 @@ flowchart LR
   end
   proc["/proc<br/>is the pid still that session?"]
   tmux["tmux list-panes<br/>which pane runs it"]
-  shep["shepherd status --all --json<br/>git status (recap only)"]
+  shep["shepherd status --all --json<br/>git status (recap)"]
+  logs["run logs a sources file names<br/>claude -p stream-json · cron text logs"]
   reg --> herd(["herd"])
   tr --> herd
   wf --> herd
@@ -22,11 +25,15 @@ flowchart LR
   proc --> herd
   tmux --> herd
   shep --> herd
-  herd --> cli(["terminal list · recap"])
+  logs --> herd
+  herd --> cli(["terminal list · recap · runs"])
   herd --> web(["dashboard on 127.0.0.1"])
+  herd --> snap(["herd snapshot JSON<br/>the herd mod's band"])
 ```
 
 ## Install
+
+`install.sh` links `herd` into `~/.local/bin`. By hand:
 
 ```bash
 ln -sfn ~/claude-dotfiles/harnesses/herd/herd.py ~/.local/bin/herd
@@ -47,6 +54,9 @@ herd resume 7b2d4e61          # back into a session, even an ended one: claude -
 herd new api ~/src/api        # start `claude --name api` in a detached tmux session `api`
 herd new api ~/src/api -- --model opus   # everything after -- goes to claude
 herd go api                   # attach to it (switch-client when already inside tmux)
+herd runs                     # headless claude -p runs and cron logs, each judged (--json for scripts)
+herd ack --failed             # seen them: failures read as warnings until the log changes
+herd snapshot                 # tracks, sessions and runs in one JSON, for the herd mod
 ```
 
 ```text
@@ -101,6 +111,41 @@ LOOSE ENDS — shepherd tracks no session above shows
   - **Live in tmux:** it attaches, like `herd go`.
   - **Ended:** it starts `claude --resume <id>` in a new tmux session, in the folder the conversation is filed under, and attaches. With `--detach` it only starts it.
   - **Live outside tmux:** it refuses, since a second copy would split the conversation.
+
+## Headless runs
+
+A cron job that runs `claude -p --output-format stream-json` can exit 0 with `subtype: success` and still not have done its work. Its background subagent may have been killed, or it may have ended on a question nobody was there to answer. `herd runs` reads each log and says what happened:
+
+```text
+SOURCE       RUN                          WHEN         VERDICT     WHY
+WBR          wbr-retail-adherence         10-12 10:35  unfinished  unfinished: 1 subagent killed
+             success · 41 turns · ≈$5.79 · 0 denied · subagents 0/1 done · 1 killed · 4 results
+WBR          wbr-wbr-inbound              10-12 09:36  ok          ok
+             success · 11 turns · ≈$0.46 · 0 denied
+WBR          wbr-weekly                   10-12 10:35  ok          [10:35:58][wbr-weekly] === Weekly run done; wbr_rc=0 …
+ShortLoad    shortload-weekly             10-12 12:00  failed      watchdog: PROBLEMAS DETECTADOS
+1 failure not acked: herd ack --failed once you have looked
+```
+
+Which logs, what a good line looks like and how often a run is due come from a sources file: `--sources`, else `$HERD_SOURCES`, else `~/.config/herd/sources.json`. [`presets/`](presets/README.md) has the format and this machine's file. The verdicts:
+
+| Verdict | When |
+| :- | :- |
+| `failed` | `is_error`, a `subtype` other than `success`, or a `terminal_reason` other than `completed`. The first of `errors` says why. For a text log: its verdict line doesn't match `ok`. |
+| `unfinished` | The run reported success, but a subagent was left running, failed or was killed. Claude Code's own halt (`killed.system`) and any outside stop count; the model's own TaskStop doesn't, and shows as `1 stopped by the model`. A `Background tasks still running after …; terminating` line on stderr (folded in with `2>&1`) counts too. With no `subagent_stats` and no task events, the result's last line saying the run still waits on an agent or task (`Now waiting for the deep-dive agent to finish`) counts. |
+| `asked` | The result ends on a question that picks between things (`Which do you want?`, `Should I publish or wait?`), or after two or more numbered options that read as choices. A closing offer is not one: `Want me to also email it?`, `Anything else?`. |
+| `denied` | Permission denials, from the results or from `permission_denied` events. |
+| `running` | No verdict yet and a write within `runningMinutes`, or the run answered and its background subagents are still going. |
+| `quiet` | A warning: no result and no write for one to two `runningMinutes`. A run blocked on one long, silent tool call looks the same as a dead one. |
+| `no result` | No result and no write for twice `runningMinutes`: killed or crashed. |
+| `no line` | A text log with no verdict line (after the last run start). |
+| `late` | The newest log of a scheduled source is older than its `expectEveryHours`. |
+| `ok` | None of the above. |
+
+- Each log is read once per version. One that grew is read from where the last read stopped; one rewritten in place is read again.
+- **`herd ack <key>…`** or **`--failed`** marks failures as seen. They then read as warnings, until the log changes. The keys live in `~/.local/state/herd/acked.json` (newest 500), so the band and the web view agree on them.
+- **`herd snapshot`** prints shepherd's tracks, the live sessions and the runs as one JSON. It uses the herd mod's shape (camelCase, milliseconds, `schema: 3`), and each part carries its own error: a missing shepherd leaves the runs intact. `--no-tracks`, `--no-sessions` and `--stale-hours N` trim it.
+- The verdict code is a port of the fleet mod's. `tests/runs_golden.json` holds what that TypeScript said for a few hundred cases, and `tests/test_runs.py` compares herd with it. When Node and the TypeScript are around, it also compares the two on the fixtures and, with `HERD_PARITY_LOGS`, on real logs.
 
 ## The dashboard
 
@@ -202,6 +247,7 @@ Summarized by Claude at 08:30 · 1 session changed since · Summarize again
 - Child sessions started with `claude -p` from a Bash call aren't linked to their parent: nothing on disk records the link.
 - `herd go` only reaches sessions running in tmux; others show their directory so you can find the terminal.
 - A workflow whose script wasn't kept and whose launch can't be found shows as *Unnamed workflow*, with no phase total until its agents start.
+- Run verdicts come from what a stream-json log holds (`result` events, `subagent_stats`, task events, stderr folded in with `2>&1`), as Claude Code 2.1.294–2.1.296 writes it. `asked` and the words fallback of `unfinished` are heuristics over the result's last lines. Fix them in `is_asking()` and `verdict_of_stream()`, then write the golden file again (see `tests/test_runs.py`).
 
 ## Tests
 
@@ -209,4 +255,4 @@ Summarized by Claude at 08:30 · 1 session changed since · Summarize again
 python3 -m unittest discover -s harnesses/herd/tests -t harnesses/herd/tests
 ```
 
-They use a fake Claude config dir (`CLAUDE_CONFIG_DIR`), fake sessions and workflow runs, throwaway git repos, a fake `shepherd` (`HERD_SHEPHERD`), a dashboard on a random port and a private tmux server (`TMUX_TMPDIR`), so they never touch your real sessions.
+They use a fake Claude config dir (`CLAUDE_CONFIG_DIR`), fake sessions and workflow runs, throwaway git repos, a fake `shepherd` (`HERD_SHEPHERD`), a dashboard on a random port and a private tmux server (`TMUX_TMPDIR`), so they never touch your real sessions. `test_runs.py` also runs the fleet mod's TypeScript under Node 22.6+ when it finds it (`HERD_FLEET_TS`), and judges real logs both ways with `HERD_PARITY_LOGS=~/.claude/logs`. `python3 harnesses/herd/presets/test_presets.py` checks the sources preset and scans herd for confidential values.

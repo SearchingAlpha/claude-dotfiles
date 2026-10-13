@@ -75,7 +75,7 @@ The options live in `pluginConfigs["fleet@claude-dotfiles"].options` in user set
 
 A number outside its range (`refresh_seconds` 15 to 3600, `stale_hours` 1 to 720) makes Claude Code refuse to load the mod at all: the band and the status line are gone, and only `claude --debug` says why (`fleet: options do not fit plugin.json userConfig: …`).
 
-A sources file holds what the options cannot: text logs, schedules, patterns. `presets/sources.json` is the author's, committed with its how-to in `presets/README.md`; yours can sit anywhere `sources_file` names. The shape:
+A sources file holds what the options cannot: text logs, schedules, patterns. The author's now lives with herd, which judges runs itself, as [`harnesses/herd/presets/sources.json`](../../harnesses/herd/presets/README.md); yours can sit anywhere `sources_file` names. The shape:
 
 ```json
 {
@@ -110,13 +110,12 @@ To log a cron run this way: `claude -p "…" --output-format stream-json --verbo
 | `hooks/view.ts` | The pane's tree |
 | `types/index.d.ts` | The `$.state` contract and the snapshot's shapes |
 | `tests/` | `fixtures.ts` (stub world, real-shaped JSON, logs and envelopes), `parsers.test.ts`, `fleet.test.ts` |
-| `presets/` | `sources.json` (the author's headless runs) and its `README.md`; `test_presets.py`, which loads the preset through `hooks/fleet.ts` and scans the mod for confidential values; `private.example.json`, the shape of the gitignored deny list it reads |
 
 ## Check and try it
 
 ```bash
 mods/check.sh fleet                         # validate, tests, probe, headless load, tsc
-python3 mods/fleet/presets/test_presets.py  # the preset through the mod's parser; no confidential value committed
+python3 harnesses/herd/presets/test_presets.py  # the preset through herd's parser; nothing confidential in herd or this mod
 harnesses/tools/moddev.sh fleet --smoke     # headless load, no model turn
 harnesses/tools/moddev.sh fleet             # live: the band shows; type /fleet
 ```
