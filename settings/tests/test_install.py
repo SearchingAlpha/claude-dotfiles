@@ -218,6 +218,9 @@ class WholeInstallSh(unittest.TestCase):
         self.assertIn("Done. 3 command(s) linked to", out)
         self.assertEqual(os.readlink(self.home / ".local" / "bin" / "shepherd"),
                          str(self.main / "harnesses" / "shepherd" / "shepherd.py"))
+        self.assertEqual(os.readlink(self.home / ".local" / "bin" / "herd"),
+                         str(self.main / "harnesses" / "herd" / "herd.py"))
+        self.assertIn("harnesses/herd/presets/sources.json", out)
         self.assertTrue(self.calls())
         self.assertTrue(all(x.startswith("claude plugin ") for x in self.calls()), self.calls())
         for hint in ("settings/merge.py", "precommit_scan.py\" install <repo>",
@@ -236,7 +239,7 @@ class WholeInstallSh(unittest.TestCase):
         out = self.run_install(self.wt, "--plugin-commands-only")
         self.assertEqual(sorted(p.name for p in c.iterdir()), ["hs-demo.md", "mine.md", "x.md"])
         self.assertIn("3 link(s) removed", out)
-        self.assertNotIn("Linked: ", out.replace("Linked: shepherd", ""))
+        self.assertNotIn("Linked: ", out.replace("Linked: shepherd", "").replace("Linked: herd", ""))
         self.assertNotIn("install.sh --plugin-commands-only (no short names)", out)
         self.assertTrue(all(x.startswith("claude plugin ") for x in self.calls()), self.calls())
         # Run again: nothing left to remove, and still nothing linked.
