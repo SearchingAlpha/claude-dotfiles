@@ -1,45 +1,45 @@
-// fleet: one line above the prompt and a /fleet pane that say, from any
-// session, which shepherd tracks are blocked, in review or stale, which
-// sessions wait on the person, and whether unattended `claude -p` runs really
-// finished. It follows mods/CLAUDE.md: inert where nothing draws (claude -p,
-// cron, the SDK), observe-only (every engine event but its own registered
-// /fleet is passed on unchanged),
-// no tool.call or tool.check hook, no model call, and every process it starts
-// is either a read on its clock or a press of the person's.
+// herd: one line above the prompt and a /herd pane that say, from any session,
+// which shepherd tracks are blocked, in review or stale, which sessions wait on
+// the person, and whether unattended `claude -p` runs really finished. It draws
+// what `herd snapshot --json` prints; herd does the reading and the judging.
+// It follows mods/CLAUDE.md: inert where nothing draws (claude -p, cron, the
+// SDK), observe-only (every engine event but its own registered /herd is passed
+// on unchanged), no tool.call or tool.check hook, no model call, and every
+// process it starts is either a read on its clock or a press of the person's.
 import { atom, read, update } from 'claude-code'
 import type {
   EngineInterface,
-  FleetFaults,
-  FleetInboxEntry,
-  FleetRun,
-  FleetSession,
-  FleetSnapshot,
-  FleetTab,
+  HerdFaults,
+  HerdInboxEntry,
+  HerdRun,
+  HerdSession,
+  HerdSnapshot,
+  HerdTab,
   On,
   PluginOptions,
   SessionSendResult,
   Timer,
 } from 'claude-code'
 
-import { ackedOf, bandOf, configKeyOf, configOf, fitted, peerToastOf, plural, snapshotOf, statusOf, tabOf, toneOf, urgentTab, withHealth } from './fleet'
-import type { Config } from './fleet'
-import { acceptEntry, boardUrl, errorText, readInbox, readSnapshot } from './read'
-import type { FactsCache, Reader } from './read'
+import { ackedOf, bandOf, configKeyOf, configOf, fitted, peerToastOf, plural, sharedOf, statusOf, tabOf, toneOf, urgentTab, withHealth } from './herd'
+import type { Config } from './herd'
+import { acceptEntry, ackRuns, boardUrl, errorText, readInbox, readSnapshot } from './read'
+import type { Reader } from './read'
 import { paneOf, styleOf } from './view'
 
-const PANE = 'fleet'
+const PANE = 'herd'
 
-const NO_FAULTS: FleetFaults = { refresh: null, share: null, command: null }
+const NO_FAULTS: HerdFaults = { refresh: null, share: null, command: null }
 
 // `plugin` and `key` stay string literals and each atom sits in a const:
 // `claude plugin validate` reads them off the source and holds them to
 // types/index.d.ts.
-const snapshotAtom = atom({ plugin: 'fleet', key: 'snapshot' } as const, null)
-const ackedAtom = atom({ plugin: 'fleet', key: 'acked' } as const, [])
-const tabAtom = atom({ plugin: 'fleet', key: 'tab' } as const, 'tracks')
-const inboxAtom = atom({ plugin: 'fleet', key: 'inbox' } as const, null)
-const noticeAtom = atom({ plugin: 'fleet', key: 'notice' } as const, null)
-const faultsAtom = atom({ plugin: 'fleet', key: 'faults' } as const, NO_FAULTS)
+const snapshotAtom = atom({ plugin: 'herd', key: 'snapshot' } as const, null)
+const ackedAtom = atom({ plugin: 'herd', key: 'acked' } as const, [])
+const tabAtom = atom({ plugin: 'herd', key: 'tab' } as const, 'tracks')
+const inboxAtom = atom({ plugin: 'herd', key: 'inbox' } as const, null)
+const noticeAtom = atom({ plugin: 'herd', key: 'notice' } as const, null)
+const faultsAtom = atom({ plugin: 'herd', key: 'faults' } as const, NO_FAULTS)
 
 /**
  * What Ping sends: a question for the other session's model, nothing it must
@@ -47,13 +47,16 @@ const faultsAtom = atom({ plugin: 'fleet', key: 'faults' } as const, NO_FAULTS)
  * own transcript.
  */
 export const PING_TEXT =
-  'Status check from the person, sent with the fleet pane: say in one line, in your own reply here, what you are doing and what you are waiting for. Do not message the sender back.'
+  'Status check from the person, sent with the herd pane: say in one line, in your own reply here, what you are doing and what you are waiting for. Do not message the sender back.'
 
 /** A refresh another session stored this recently is shown as it is, not read again. */
 const FRESH_SHARE = 0.75
 
-/** The band is a plain Button: `f: ` before its pieces, and the engine's hint beside it when focused. */
+/** The band is a plain Button: `h: ` before its pieces, and the engine's hint beside it when focused. */
 const BAND_RESERVED_CELLS = 3 + 2
+
+/** The $.store key every session shares its last read under: `{ config, snapshot }`. */
+const SHARED = 'shared'
 
 /**
  * The engine as `session.start` (or `session.attach`) bound it: the timers and
@@ -67,11 +70,11 @@ type Host = Reader & {
   toast: (text: string) => void
   log: (text: string) => void
   send: (sessionId: string, text: string) => Promise<SessionSendResult>
-  setSnapshot: (snapshot: FleetSnapshot | null) => Promise<unknown>
+  setSnapshot: (snapshot: HerdSnapshot | null) => Promise<unknown>
   setAcked: (acked: string[]) => Promise<unknown>
   setNotice: (notice: string | null) => Promise<unknown>
-  setInbox: (inbox: FleetInboxEntry[] | null) => Promise<unknown>
-  setFaults: (faults: FleetFaults) => Promise<unknown>
+  setInbox: (inbox: HerdInboxEntry[] | null) => Promise<unknown>
+  setFaults: (faults: HerdFaults) => Promise<unknown>
 }
 
 /** The module's own state: what a reload may lose. */
@@ -79,7 +82,7 @@ type Live = {
   cfg: Config
   key: string
   isLive: boolean
-  /** `/fleet` is this mod's: registered in this session. Until then /fleet is passed on to whatever owns it. */
+  /** `/herd` is this mod's: registered in this session. Until then /herd is passed on to whatever owns it. */
   isRegistered: boolean
   host: Host | null
   home: string | null
@@ -88,15 +91,15 @@ type Live = {
   isReading: boolean
   isQueued: boolean
   /** The snapshot last shown, and the acks it was shown with. */
-  last: FleetSnapshot | null
+  last: HerdSnapshot | null
   shownAt: number | null
-  acked: string[]
   shownAcked: string | null
+  /** Keys this session acked with `herd ack`: shown as acked even by a read that began before the press. */
+  ackedHere: string[]
   /** The status line last set: set again only when it changes. */
   status: string | undefined
   /** The faults last put in $.state: written again only when they change. */
-  faults: FleetFaults
-  cache: FactsCache
+  faults: HerdFaults
 }
 
 /**
@@ -108,8 +111,6 @@ function hostOf($: EngineInterface): Host {
   return {
     now: () => $.clock.now(),
     run: (argv, init) => $.process.run(argv, init),
-    list: path => $.fs.list(path),
-    read: path => $.fs.read(path),
     storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),
     status: text => $.ui.status(text),
@@ -124,12 +125,12 @@ function hostOf($: EngineInterface): Host {
   }
 }
 
-/** Puts a snapshot and the acks on screen: the state the band and pane read, and the status line. */
-async function show(live: Live, host: Host, snapshot: FleetSnapshot | null, acked: string[]): Promise<void> {
+/** Puts a snapshot and its acks on screen: the state the band and pane read, and the status line. */
+async function show(live: Live, host: Host, snapshot: HerdSnapshot | null): Promise<void> {
+  const acked = ackedOf(snapshot, live.ackedHere)
   const ackedKey = JSON.stringify(acked)
 
   live.last = snapshot
-  live.acked = acked
   if (snapshot !== null && live.shownAt !== snapshot.at) {
     await host.setSnapshot(snapshot)
     live.shownAt = snapshot.at
@@ -148,7 +149,7 @@ async function show(live: Live, host: Host, snapshot: FleetSnapshot | null, acke
 }
 
 /** Records the mod's own failures where the pane and the band show them; a write only when they change. */
-async function setFaults(live: Live, host: Host, change: Partial<FleetFaults>): Promise<void> {
+async function setFaults(live: Live, host: Host, change: Partial<HerdFaults>): Promise<void> {
   const next = { ...live.faults, ...change }
 
   if (JSON.stringify(next) !== JSON.stringify(live.faults)) {
@@ -157,30 +158,10 @@ async function setFaults(live: Live, host: Host, change: Partial<FleetFaults>): 
   }
 }
 
-/** The acks and the snapshot every session shares. An unreadable store reads as nothing shared, and says why. */
-async function sharedOf(live: Live, host: Host): Promise<{ acked: string[]; stored: FleetSnapshot | null; error: string | null }> {
-  try {
-    return { acked: ackedOf(await host.storeGet('acked')), stored: snapshotOf(await host.storeGet('snapshot')), error: null }
-  } catch (error) {
-    return { acked: live.acked, stored: null, error: errorText(error) }
-  }
-}
-
 /**
- * The acks to show with a read that just landed: the store's now (an Ack
- * pressed while the read ran is there), and this session's own, whose write may
- * still be landing. Acks are only ever added, so the union is never stale.
- */
-async function acksNow(live: Live, host: Host): Promise<string[]> {
-  const stored = await host.storeGet('acked').then(ackedOf, () => [] as string[])
-
-  return ackedOf([...stored, ...live.acked.filter(k => !stored.includes(k))])
-}
-
-/**
- * One refresh: adopt what another session stored a moment ago, else read
- * everything again, show it, and store it for them. `force` reads whatever is
- * stored. A store that refuses the write never hides a fresh read.
+ * One refresh: adopt what another session stored a moment ago, else run herd
+ * again, show it, and store it for them. `force` reads whatever is stored. A
+ * store that refuses the write never hides a fresh read.
  */
 async function tick(live: Live, force: boolean): Promise<void> {
   const host = live.host
@@ -198,34 +179,37 @@ async function tick(live: Live, force: boolean): Promise<void> {
 
   try {
     const now = await host.now()
-    const shared = await sharedOf(live, host)
-    const stored = shared.stored
-    const isFresh = stored !== null && stored.config === live.key && now - stored.at < live.cfg.periodMs * FRESH_SHARE
-    let shareError = shared.error
+    let shareError: string | null = null
+    let stored: HerdSnapshot | null = null
 
-    if (!force && isFresh) {
-      await show(live, host, stored, shared.acked)
+    try {
+      stored = sharedOf(await host.storeGet(SHARED), live.key)
+    } catch (error) {
+      shareError = errorText(error)
+    }
+
+    if (!force && stored !== null && now - stored.at < live.cfg.periodMs * FRESH_SHARE) {
+      await show(live, host, stored)
     } else {
-      const snapshot = await readSnapshot(host, live.cfg, live.home, live.cache)
+      const snapshot = await readSnapshot(host, live.cfg, live.home)
 
-      host.log(`fleet: read in ${snapshot.tookMs} ms (${snapshot.tracks.length} tracks, ${snapshot.sessions.length} sessions, ${snapshot.runs.length} runs)`)
-      // Not shared.acked: that was read before the read began, and would undo an Ack pressed since.
-      await show(live, host, snapshot, await acksNow(live, host))
+      host.log(`herd: read in ${snapshot.tookMs} ms (${snapshot.tracks.length} tracks, ${snapshot.sessions.length} sessions, ${snapshot.runs.length} runs)`)
+      await show(live, host, snapshot)
 
       if (shareError === null) {
-        shareError = await host.storeSet('snapshot', snapshot).then(
+        shareError = await host.storeSet(SHARED, { config: live.key, snapshot }).then(
           () => null,
           (error: unknown) => errorText(error),
         )
       }
     }
     if (shareError !== null) {
-      host.log(`fleet: snapshot not shared: ${shareError}`)
+      host.log(`herd: snapshot not shared: ${shareError}`)
     }
     await setFaults(live, host, { refresh: null, share: shareError })
   } catch (error) {
-    // Fail open: the band keeps the last snapshot, marked `fleet ?`, and the pane says why.
-    host.log(`fleet: refresh failed: ${String(error)}`)
+    // Fail open: the band keeps the last snapshot, marked `herd ?`, and the pane says why.
+    host.log(`herd: refresh failed: ${String(error)}`)
     await setFaults(live, host, { refresh: errorText(error) }).catch(() => undefined)
   } finally {
     live.isReading = false
@@ -237,20 +221,19 @@ async function tick(live: Live, force: boolean): Promise<void> {
   }
 }
 
-/** Shows the snapshot another session (or this one before a reload) stored, when it was read with these options. */
+/** Shows the read another session (or this one before a reload) stored, when it was read with these options. */
 async function adoptStored(live: Live, host: Host): Promise<void> {
-  const stored = snapshotOf(await host.storeGet('snapshot'))
-
-  await show(live, host, stored !== null && stored.config === live.key ? stored : null, ackedOf(await host.storeGet('acked')))
+  await show(live, host, sharedOf(await host.storeGet(SHARED), live.key))
 }
 
-/** Adds failures to the acked keys every session shares; re-read right before the write. Says what it acked. */
-async function ack(live: Live, host: Host, runs: readonly FleetRun[]): Promise<string> {
-  const acked = ackedOf(await host.storeGet('acked'))
-  const next = ackedOf([...acked, ...runs.map(r => r.key).filter(k => !acked.includes(k))])
+/** Marks failures as seen with `herd ack`, for every session and the board, then reads again. Says what it acked. */
+async function ack(live: Live, host: Host, runs: readonly HerdRun[]): Promise<string> {
+  const keys = runs.map(r => r.key)
 
-  await host.storeSet('acked', next)
-  await show(live, host, live.last, next)
+  await ackRuns(host, live.cfg, live.home, keys)
+  live.ackedHere = [...new Set([...live.ackedHere, ...keys])].slice(-500)
+  await show(live, host, live.last)
+  void tick(live, true)
 
   const [only] = runs
 
@@ -265,7 +248,7 @@ async function noted(host: Host, what: string, work: () => Promise<string>): Pro
     said = await work()
   } catch (error) {
     said = `${what} failed: ${errorText(error)}`
-    host.log(`fleet: ${said}`)
+    host.log(`herd: ${said}`)
   }
   await host.setNotice(said).catch(() => undefined)
 }
@@ -285,7 +268,7 @@ async function goLive($: EngineInterface, live: Live): Promise<void> {
   try {
     await adoptStored(live, live.host)
   } catch (error) {
-    $.ui.log(`fleet: stored snapshot not read: ${String(error)}`, { to: 'debug' })
+    $.ui.log(`herd: stored snapshot not read: ${String(error)}`, { to: 'debug' })
   }
   $.ui.invalidate('ui.render')
 
@@ -295,15 +278,15 @@ async function goLive($: EngineInterface, live: Live): Promise<void> {
   live.timers = [$.clock.after(0, () => void tick(live, false)), $.clock.every(live.cfg.periodMs, () => void tick(live, false))]
 
   // Last, and caught: register throws for a taken name (a skill or command the
-  // person has called fleet), and a hook that throws is skipped whole. /fleet
+  // person has called herd), and a hook that throws is skipped whole. /herd
   // then stays theirs (command.run passes it on); the band still opens the
-  // pane, and the pane's footer says why /fleet is missing.
+  // pane, and the pane's footer says why /herd is missing.
   try {
-    await $.command.register({ name: 'fleet', description: 'Open the fleet pane: shepherd tracks, sessions and headless runs', immediate: true })
+    await $.command.register({ name: 'herd', description: 'Open the herd pane: shepherd tracks, sessions and headless runs', immediate: true })
     live.isRegistered = true
     await setFaults(live, live.host, { command: null })
   } catch (error) {
-    $.ui.log(`fleet: /fleet not registered: ${String(error)}`, { to: 'debug' })
+    $.ui.log(`herd: /herd not registered: ${String(error)}`, { to: 'debug' })
     await setFaults(live, live.host, { command: errorText(error) }).catch(() => undefined)
   }
 }
@@ -326,11 +309,10 @@ export function register(on: On, options: PluginOptions) {
     isQueued: false,
     last: null,
     shownAt: null,
-    acked: [],
     shownAcked: null,
+    ackedHere: [],
     status: undefined,
     faults: NO_FAULTS,
-    cache: new Map(),
   }
 
   // A terminal session, a background one (`claude --bg`, agent view: it starts
@@ -357,21 +339,19 @@ export function register(on: On, options: PluginOptions) {
 
   // /clear, /resume and /branch reset $.state and go on under a new session id,
   // with no session.start: read the id again (so Ping never offers this session
-  // to itself) and copy the shared snapshot and acks back from $.store. Reads
-  // only, so it may run with nothing attached too.
+  // to itself) and copy the shared snapshot back from $.store. Reads only, so
+  // it may run with nothing attached too.
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     const result = await next(e)
 
     if (live.isLive) {
       try {
         live.selfId = await $.session.id().catch(() => live.selfId)
-
-        const stored = snapshotOf(await $.store.get('snapshot'))
-        const acked = ackedOf(await $.store.get('acked'))
-
-        live.last = stored !== null && stored.config === live.key ? stored : live.last
+        live.last = sharedOf(await $.store.get(SHARED), live.key) ?? live.last
         live.shownAt = live.last?.at ?? null
-        live.acked = acked
+
+        const acked = ackedOf(live.last, live.ackedHere)
+
         live.shownAcked = JSON.stringify(acked)
         // The next refresh pins the status line again if it still has something to say.
         live.status = undefined
@@ -379,7 +359,7 @@ export function register(on: On, options: PluginOptions) {
         await update($, ackedAtom, () => acked)
         await update($, faultsAtom, () => live.faults)
       } catch (error) {
-        $.ui.log(`fleet: state not restored after ${e.source}: ${String(error)}`, { to: 'debug' })
+        $.ui.log(`herd: state not restored after ${e.source}: ${String(error)}`, { to: 'debug' })
       }
       $.ui.invalidate('ui.render')
     }
@@ -406,11 +386,11 @@ export function register(on: On, options: PluginOptions) {
     return result
   }).catch(($, e, next) => next(e))
 
-  // Answers /fleet only when it is this mod's, registered in a live session. A
-  // skill or command of the person's called fleet (register refused the name),
-  // and `claude -p "/fleet"` where nothing draws, get the event passed on: an
+  // Answers /herd only when it is this mod's, registered in a live session. A
+  // skill or command of the person's called herd (register refused the name),
+  // and `claude -p "/herd"` where nothing draws, get the event passed on: an
   // answer without next would run no command at all. A gate, so caught.
-  on('command.run', { command: 'fleet' }, async ($, e, next) => {
+  on('command.run', { command: 'herd' }, async ($, e, next) => {
     if (!live.isLive || !live.isRegistered) {
       return next(e)
     }
@@ -421,12 +401,12 @@ export function register(on: On, options: PluginOptions) {
       await update($, tabAtom, () => tab)
     }
 
-    const opened = await $.ui.open({ id: PANE, title: 'Fleet', focus: true, closeOnEscape: true })
+    const opened = await $.ui.open({ id: PANE, title: 'Herd', focus: true, closeOnEscape: true })
 
-    return opened.isPlaced ? {} : { text: `The fleet pane is waiting: ${opened.reason}` }
+    return opened.isPlaced ? {} : { text: `The herd pane is waiting: ${opened.reason}` }
   }).catch(($, e, next) => next(e))
 
-  on('ui.render', { component: 'Pane', requestId: 'fleet' }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: 'herd' }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const snapshot = await read($, snapshotAtom)
     const acked = new Set(await read($, ackedAtom))
@@ -465,7 +445,7 @@ export function register(on: On, options: PluginOptions) {
 
             return got.errors.length === 0 ? `inbox: ${got.entries.length} for you` : `inbox: ${got.errors.join('; ')}`
           }),
-        accept: (entry: FleetInboxEntry) =>
+        accept: (entry: HerdInboxEntry) =>
           press('accept', async h => {
             const said = await acceptEntry(h, live.cfg, live.home, entry)
             const got = await readInbox(h, live.cfg, live.home, snapshot?.repos ?? [])
@@ -474,7 +454,7 @@ export function register(on: On, options: PluginOptions) {
 
             return said
           }),
-        ping: (session: FleetSession) => {
+        ping: (session: HerdSession) => {
           // Checked again at the press: the id moves on /clear, /resume and /branch.
           if (!session.isLive || session.sessionId === live.selfId) {
             return
@@ -508,7 +488,7 @@ export function register(on: On, options: PluginOptions) {
     }
 
     const { Box, Text, Button } = $.ui.resolve(e)
-    const fallback: FleetTab = await read($, tabAtom)
+    const fallback: HerdTab = await read($, tabAtom)
     // What the mods after this one draw stays, under this line.
     const below = await next(e)
 
@@ -516,16 +496,16 @@ export function register(on: On, options: PluginOptions) {
       flexDirection: 'column',
       children: [
         Button({
-          key: 'fleet-open',
-          label: 'fleet',
-          hotkey: 'f',
+          key: 'herd-open',
+          label: 'herd',
+          hotkey: 'h',
           plain: true,
           onPress: async () => {
             try {
               await update($, tabAtom, () => urgentTab(snapshot, acked, fallback))
-              await $.ui.open({ id: PANE, title: 'Fleet', focus: true, closeOnEscape: true })
+              await $.ui.open({ id: PANE, title: 'Herd', focus: true, closeOnEscape: true })
             } catch (error) {
-              $.ui.log(`fleet: pane not opened: ${String(error)}`, { to: 'debug' })
+              $.ui.log(`herd: pane not opened: ${String(error)}`, { to: 'debug' })
             }
           },
           children: segments.map(s => Text({ ...styleOf(s.tone), wrap: 'truncate-end', children: [s.text] })),

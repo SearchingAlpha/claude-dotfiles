@@ -5,7 +5,7 @@ Claude Code mods: panes, bands above the prompt, status lines and commands that 
 | Path | What it is |
 | :- | :- |
 | `_template/` | The starter mod (`mod-template`): an observe-only `/mod-template` pane and a one-line band. Copy it; it is never installed. |
-| `fleet/` | An observe-only band and `/fleet` pane: shepherd tracks, sessions waiting on you, and whether headless `claude -p` runs really finished. [`fleet/README.md`](fleet/README.md) |
+| `herd/` | An observe-only band and `/herd` pane: shepherd tracks, sessions waiting on you, and whether headless `claude -p` runs really finished. [`herd/README.md`](herd/README.md) |
 | `omnigraph/` | A live typed-graph pane: a node-link drawing, a Miller browser and an op feed that follow the graph commands Claude runs. A demo CLI and store in `demo/`, ready-made settings in `presets/`. [`omnigraph/README.md`](omnigraph/README.md) |
 | `check.sh` | The gate: validate `--strict` plus rules of its own, tests, a probe (inert where nothing draws, events passed on unchanged), a headless load, `tsc`. Exits 1 on a finding, 2 when a step could not run. |
 | `CLAUDE.md` | The rules for writing a mod here: API spelling, observe-only, surfaces, side effects, limits, off switches. |

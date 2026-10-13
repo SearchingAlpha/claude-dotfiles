@@ -1,23 +1,23 @@
-// The fleet pane's tree: three tabs (Tracks, Sessions, Runs) over one snapshot,
+// The herd pane's tree: three tabs (Tracks, Sessions, Runs) over one snapshot,
 // and the buttons the person presses. Plain functions over an element table and
 // callbacks; register.ts hands both in, so nothing here touches `$`.
 import type {
   BoxProps,
   ButtonProps,
   ElementConstructor,
-  FleetFaults,
-  FleetInboxEntry,
-  FleetRun,
-  FleetSession,
-  FleetSnapshot,
-  FleetTab,
-  FleetTone,
+  HerdFaults,
+  HerdInboxEntry,
+  HerdRun,
+  HerdSession,
+  HerdSnapshot,
+  HerdTab,
+  HerdTone,
   RenderElement,
   TextProps,
 } from 'claude-code'
 
-import { agoOf, firstLineOf, plural, runLineOf, sessionLineOf, sessionRank, toneOf, trackLineOf } from './fleet'
-import type { Segment } from './fleet'
+import { agoOf, firstLineOf, plural, runLineOf, sessionLineOf, sessionRank, toneOf, trackLineOf } from './herd'
+import type { Segment } from './herd'
 
 export type Els = {
   Box: ElementConstructor<BoxProps>
@@ -26,13 +26,13 @@ export type Els = {
 }
 
 export type PaneModel = {
-  snapshot: FleetSnapshot | null
+  snapshot: HerdSnapshot | null
   acked: ReadonlySet<string>
-  tab: FleetTab
-  inbox: FleetInboxEntry[] | null
+  tab: HerdTab
+  inbox: HerdInboxEntry[] | null
   notice: string | null
-  /** The mod's own failures: refresh, share, /fleet's registration. */
-  faults: FleetFaults
+  /** The mod's own failures: refresh, share, /herd's registration. */
+  faults: HerdFaults
   nowMs: number
   /** This session: no Ping for it. */
   selfId: string | null
@@ -40,18 +40,18 @@ export type PaneModel = {
 
 /** What the buttons do; every one is the person's press. */
 export type PaneActions = {
-  tab: (tab: FleetTab) => void
+  tab: (tab: HerdTab) => void
   refresh: () => void
   board: () => void
   inbox: () => void
-  accept: (entry: FleetInboxEntry) => void
-  ping: (session: FleetSession) => void
-  ack: (run: FleetRun) => void
+  accept: (entry: HerdInboxEntry) => void
+  ping: (session: HerdSession) => void
+  ack: (run: HerdRun) => void
   ackAll: () => void
   close: () => void
 }
 
-const TABS: readonly { tab: FleetTab; label: string; hotkey: string }[] = [
+const TABS: readonly { tab: HerdTab; label: string; hotkey: string }[] = [
   { tab: 'tracks', label: 'Tracks', hotkey: '1' },
   { tab: 'sessions', label: 'Sessions', hotkey: '2' },
   { tab: 'runs', label: 'Runs', hotkey: '3' },
@@ -61,7 +61,7 @@ const TABS: readonly { tab: FleetTab; label: string; hotkey: string }[] = [
 const MAX_SESSIONS = 40
 
 /** A tone as Text props: the theme's own colors, so it follows the person's theme. */
-export function styleOf(tone: FleetTone): TextProps {
+export function styleOf(tone: HerdTone): TextProps {
   switch (tone) {
     case 'ok':
       return { color: 'success' }
@@ -95,12 +95,14 @@ function tracksTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     return [dim(els, 'reading…')]
   }
   if (!s.tracksOn) {
-    return [dim(els, 'Tracks are off (the tracks option).')]
+    return [dim(els, 'Tracks are off: herd snapshot ran with --no-tracks.')]
   }
-  if (s.tracksError !== null) {
-    out.push(line(els, { text: s.tracksMissing ? `shepherd is not installed here: ${s.tracksError}` : s.tracksError, tone: s.tracksMissing ? 'dim' : 'warn' }))
+  if (s.tracksMissing) {
+    out.push(dim(els, 'herd found no shepherd to run here: no tracks to show.'))
+  } else if (s.tracksError !== null) {
+    out.push(line(els, { text: s.tracksError, tone: 'warn' }))
   }
-  if (s.tracks.length === 0 && s.tracksError === null) {
+  if (s.tracks.length === 0 && s.tracksError === null && !s.tracksMissing) {
     out.push(dim(els, 'No shepherd tracks in any enrolled repo.'))
   }
 
@@ -145,7 +147,7 @@ function sessionsTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     return [dim(els, 'reading…')]
   }
   if (!s.sessionsOn) {
-    return [dim(els, 'Sessions are off (the sessions option).')]
+    return [dim(els, 'Sessions are off: herd snapshot ran with --no-sessions.')]
   }
 
   const out: RenderElement[] = []
@@ -178,7 +180,7 @@ function sessionsTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     )
   }
   if (sessions.length > MAX_SESSIONS) {
-    out.push(dim(els, `… ${sessions.length - MAX_SESSIONS} more: claude agents`))
+    out.push(dim(els, `… ${sessions.length - MAX_SESSIONS} more: herd ls`))
   }
 
   return out
@@ -197,7 +199,7 @@ function runsTab(els: Els, m: PaneModel, a: PaneActions): RenderElement[] {
     out.push(line(els, { text: s.sourcesError, tone: 'warn' }))
   }
   if (s.sources.length === 0) {
-    out.push(dim(els, 'No run sources: set the runs option or a sources file (see the README).'))
+    out.push(dim(els, 'No run sources: herd reads ~/.config/herd/sources.json or $HERD_SOURCES (harnesses/herd/presets/README.md).'))
   }
 
   for (const label of [...new Set(s.sources.map(x => x.label))]) {
@@ -268,10 +270,10 @@ export function paneOf(els: Els, m: PaneModel, a: PaneActions): RenderElement {
 }
 
 /** The mod's own failures, one line each: nothing else shows them outside `--debug`. */
-function faultLines(f: FleetFaults): string[] {
+function faultLines(f: HerdFaults): string[] {
   return [
     f.refresh === null ? null : `refresh failed: ${f.refresh}`,
     f.share === null ? null : `not shared with other sessions: ${f.share}`,
-    f.command === null ? null : `/fleet not registered (the band still opens this pane): ${f.command}`,
+    f.command === null ? null : `/herd not registered (the band still opens this pane): ${f.command}`,
   ].filter((x): x is string => x !== null)
 }

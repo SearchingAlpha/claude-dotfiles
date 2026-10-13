@@ -1,0 +1,45 @@
+{
+  "name": "herd",
+  "version": "0.2.0",
+  "description": "Observe-only herd band and /herd pane: shepherd tracks blocked, in review or stale, sessions waiting on you, and whether headless claude -p runs really finished, as `herd snapshot` reports them.",
+  "author": {
+    "name": "SearchingAlpha"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "band": {
+      "type": "boolean",
+      "title": "Band above the prompt",
+      "description": "Draw the one-line herd band above the prompt. Off leaves the band to other mods; /herd still opens the pane.",
+      "default": true
+    },
+    "herd_bin": {
+      "type": "string",
+      "title": "herd executable",
+      "description": "The herd command the mod runs (`herd snapshot`, `herd ack`): a name looked up on PATH, or a path (~/ is your home).",
+      "default": "herd"
+    },
+    "shepherd_bin": {
+      "type": "string",
+      "title": "shepherd executable",
+      "description": "The shepherd command the Inbox, Accept and Open board buttons run: a name on PATH, or a path.",
+      "default": "shepherd"
+    },
+    "refresh_seconds": {
+      "type": "number",
+      "title": "Refresh every (seconds)",
+      "description": "How often a live session runs herd again; sessions share what one read a moment ago.",
+      "default": 60,
+      "min": 15,
+      "max": 3600
+    },
+    "stale_hours": {
+      "type": "number",
+      "title": "Stale after (hours)",
+      "description": "An active track with no activity for this long, or whose owner session ended, counts as stale.",
+      "default": 24,
+      "min": 1,
+      "max": 720
+    }
+  }
+}

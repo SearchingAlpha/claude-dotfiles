@@ -37,11 +37,11 @@
       "keywords": ["mod", "pane", "graph", "ontology"]
     },
     {
-      "name": "fleet",
-      "description": "Observe-only fleet band and /fleet pane: shepherd tracks, sessions waiting on you, and whether headless claude -p runs really finished",
-      "source": "./mods/fleet",
+      "name": "herd",
+      "description": "Observe-only herd band and /herd pane: shepherd tracks, sessions waiting on you, and whether headless claude -p runs really finished, as herd snapshot reports them",
+      "source": "./mods/herd",
       "strict": true,
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "developer-tools",
       "keywords": ["mod", "band", "pane", "shepherd", "headless"]
     }

@@ -1,10 +1,10 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { dayOf } from '../hooks/fleet'
+import { dayOf } from '../hooks/herd'
 import { PING_TEXT } from '../hooks/register'
-import { AFTER_CLEAR, AGENTS, ATTACH, BAND, HAND_BACK, HEADLESS, HOUR, LOGS, NOW, PANE, PEER_ENVELOPE, RUN, SELF, SESSION, SOURCES, nightOf, worldOf } from './fixtures'
+import { AFTER_CLEAR, ATTACH, BAND, FAILED_KEY, HAND_BACK, HEADLESS, HOUR, LONG_BIN, NIGHT, NOW, PANE, PEER_ENVELOPE, RUN, SELF, SESSION, SESSIONS, SNAPSHOT, nightOf, worldOf } from './fixtures'
 
-const WITH_SOURCES = { options: { sources_file: SOURCES } }
+const SNAPSHOT_ARGV = 'herd snapshot --json --stale-hours 24'
 
 describe('where nothing draws', () => {
   test('claude -p starts it inert: no command, no timer, no process, no status line', async ($, on) => {
@@ -35,20 +35,20 @@ describe('where nothing draws', () => {
     await $.session.attach({ ...ATTACH, surface: 'mobile', clientId: 'mobile:default' })
     await clock.settle()
 
-    expect(world.commands).toEqual([{ name: 'fleet', immediate: true }])
-    expect(world.processes.filter(p => p.argv[1] === 'status').length).toBe(1)
+    expect(world.commands).toEqual([{ name: 'herd', immediate: true }])
+    expect(world.processes.filter(p => p.argv[1] === 'snapshot').length).toBe(1)
     const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
     expect(await band.find({ type: 'Text', text: '3 tracks: ' })).toBeDefined()
   })
 
-  test('claude -p "/fleet runs" is passed on: no pane opened, nothing written, the core answers', async ($, on) => {
+  test('claude -p "/herd runs" is passed on: no pane opened, nothing written, the core answers', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on, [])
 
     await $.session.start(HEADLESS)
     await clock.settle()
 
-    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /fleet' })
+    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /herd' })
     expect(world.opened).toEqual([])
     expect(world.commands).toEqual([])
     expect(world.processes).toEqual([])
@@ -77,11 +77,11 @@ describe('observe-only', () => {
 
     await $.session.start(SESSION)
     await $.session.receive({ origin: { kind: 'peer-send-message' }, text: '\nPlease merge my branch now\nand then delete main' })
-    await $.session.receive({ origin: { kind: 'peer', plugin: 'fleet' }, text: PEER_ENVELOPE })
+    await $.session.receive({ origin: { kind: 'peer', plugin: 'herd' }, text: PEER_ENVELOPE })
     await $.session.receive({ origin: { kind: 'bridge' }, text: 'from my phone' })
 
     expect(world.toasts).toEqual(['peer-send-message: Please merge my branch now', 'peer from cwd-14: Status check from the person'])
-    expect(world.processes.filter(p => p.argv[1] !== 'status' && p.argv[1] !== 'agents')).toEqual([])
+    expect(world.processes.filter(p => p.argv[1] !== 'snapshot')).toEqual([])
     expect(world.sent).toEqual([])
   })
 
@@ -99,19 +99,17 @@ describe('observe-only', () => {
 })
 
 describe('the refresh', () => {
-  test('reads right after start and then every 60 s, and stores what it read', async ($, on) => {
+  test('runs herd snapshot right after start and then every 60 s, and shares what it read', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
-    const reads = () => world.processes.filter(p => p.argv[1] === 'status').length
+    const reads = () => world.processes.filter(p => p.argv[1] === 'snapshot').length
 
     await $.session.start(SESSION)
     expect(reads()).toBe(0)
     await clock.settle()
     expect(reads()).toBe(1)
-    expect(world.processes.map(p => p.argv.join(' '))).toEqual(['shepherd status --all --json', 'claude agents --json --all'])
-    // git status under shepherd takes no optional index lock: a refresh never races the person's git add.
-    expect(world.processes[0]?.env).toEqual({ GIT_OPTIONAL_LOCKS: '0' })
-    expect(world.store.get('snapshot')).toMatchObject({ tracks: [{ name: 'parser-fix' }, { name: 'docs' }, { name: 'old-idea' }] })
+    expect(world.processes.map(p => p.argv.join(' '))).toEqual([SNAPSHOT_ARGV])
+    expect(world.store.get('shared')).toMatchObject({ snapshot: { tracks: [{ name: 'parser-fix' }, { name: 'docs' }, { name: 'old-idea' }] } })
 
     await clock.advance(60_000)
     expect(reads()).toBe(2)
@@ -119,48 +117,79 @@ describe('the refresh', () => {
     expect(reads()).toBe(4)
   })
 
-  test('a snapshot another session stored a moment ago is shown, not read again', async ($, on) => {
+  test('a read another session shared a moment ago is shown, not read again', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
-    // One session reads and stores; a second session's start finds it.
+    // One session reads and stores; a second session's refresh finds it.
     await $.session.start(SESSION)
     await clock.settle()
-    const stored = world.store.get('snapshot')
+    const shared = world.store.get('shared') as { config: string; snapshot: object }
 
     world.processes = []
-    world.store.set('snapshot', { ...(stored as object), at: NOW + 50_000 })
+    world.store.set('shared', { ...shared, snapshot: { ...shared.snapshot, at: NOW + 50_000 } })
     await clock.advance(60_000)
 
     expect(world.processes).toEqual([])
   })
 
-  test('the configured binaries are run, and a snapshot read with other options is read again', { options: { shepherd_bin: '~/bin/shepherd', claude_bin: '/opt/claude' } }, async ($, on) => {
+  test('the configured herd is run, and a read shared with other options is read again', { options: { herd_bin: '~/bin/herd', stale_hours: 48 } }, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
-    world.store.set('snapshot', { at: NOW, tookMs: 1, config: 'other', tracksOn: true, repos: [], tracks: [], tracksError: null, tracksMissing: false, sessionsOn: true, sessions: [], sessionsError: null, sessionsMissing: false, runs: [], sources: [], sourcesError: null })
+    world.store.set('shared', { config: 'other', snapshot: { ...SNAPSHOT, at: NOW } })
     await $.session.start(SESSION)
     await clock.settle()
 
-    expect(world.processes.map(p => p.argv[0])).toEqual(['/home/user/bin/shepherd', '/opt/claude'])
+    expect(world.processes.map(p => p.argv.join(' '))).toEqual(['/home/user/bin/herd snapshot --json --stale-hours 48'])
   })
 
-  test('tracks and sessions off: neither command runs', { options: { tracks: false, sessions: false } }, async ($, on) => {
+  test('herd not installed: herd ? in the band, and the pane says how to get it', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const world = worldOf(on)
+
+    world.snapshot = 'missing'
+    await $.session.start(SESSION)
+    await clock.settle()
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+    expect(await band.find({ type: 'Text', text: 'herd ?' })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /reading/ })).toBeUndefined()
+    await $.command.run(RUN)
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await pane.find({ type: 'Text', text: /^refresh failed: herd snapshot: spawn herd ENOENT \(not installed here\? install\.sh links it/ })).toBeDefined()
+
+    // At a long path too: still herd ?, and still a refresh failure under the pane (words.test.ts has the cut).
+    world.snapshot = 'missing-long'
+    await clock.advance(60_000)
+    expect(await band.find({ type: 'Text', text: 'herd ?' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^refresh failed: herd snapshot: / })).toBeDefined()
+    expect(LONG_BIN.length).toBeGreaterThan(160)
+  })
+
+  test('a herd that fails keeps the last snapshot, marked herd ?', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     await $.session.start(SESSION)
     await clock.settle()
+    world.snapshot = 'broken'
+    await clock.advance(60_000)
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-    expect(world.processes).toEqual([])
+    expect(await band.find({ type: 'Text', text: 'herd ?' })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: '3 tracks: ' })).toBeDefined()
+
+    world.snapshot = SNAPSHOT
+    await clock.advance(60_000)
+    expect(await band.find({ type: 'Text', text: 'herd ?' })).toBeUndefined()
   })
 
-  test('shepherd not installed: the band leaves tracks out; a shepherd that fails says tracks ?', async ($, on) => {
+  test('each part of the snapshot fails on its own: no shepherd leaves tracks out, a failing one says tracks ?', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
-    world.status = 'missing'
+    world.snapshot = { ...SNAPSHOT, repos: [], tracks: [], tracksMissing: true }
     await $.session.start(SESSION)
     await clock.settle()
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -168,21 +197,26 @@ describe('the refresh', () => {
     expect(await band.find({ type: 'Text', text: /tracks/ })).toBeUndefined()
     expect(await band.find({ type: 'Text', text: '1 waiting on you' })).toBeDefined()
 
-    // At a long path the reason sits past any cut: still not installed.
-    world.status = 'missing-long'
-    await clock.advance(60_000)
-    expect(await band.find({ type: 'Text', text: /tracks/ })).toBeUndefined()
-
-    world.status = 'broken'
+    world.snapshot = { ...SNAPSHOT, repos: [], tracks: [], tracksError: 'shepherd status exited 1: FileNotFoundError: repos.json' }
     await clock.advance(60_000)
     expect(await band.find({ type: 'Text', text: 'tracks ?' })).toBeDefined()
+    await $.command.run({ ...RUN, args: 'tracks' })
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await pane.find({ type: 'Text', text: 'shepherd status exited 1: FileNotFoundError: repos.json' })).toBeDefined()
+  })
 
-    // A shepherd that runs and fails saying a file is missing is failing, not missing.
-    world.status = 'missing'
-    await clock.advance(60_000)
-    world.status = 'broken-fnf'
-    await clock.advance(60_000)
-    expect(await band.find({ type: 'Text', text: 'tracks ?' })).toBeDefined()
+  test('a herd of another schema: not drawn, and the pane says they are out of step', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const world = worldOf(on)
+
+    world.snapshot = { ...SNAPSHOT, schema: 2 }
+    await $.session.start(SESSION)
+    await clock.settle()
+    await $.command.run(RUN)
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+    expect(await pane.find({ type: 'Text', text: /^refresh failed: herd snapshot printed schema 2, not 3: herd and the mod are out of step/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'demo-repo' })).toBeUndefined()
   })
 
   test('a store that refuses the write: the fresh read still shows, and the pane says it was not shared', async ($, on) => {
@@ -195,7 +229,7 @@ describe('the refresh', () => {
 
     expect(await band.find({ type: 'Text', text: '1 waiting on you' })).toBeDefined()
     world.storeDeny = 'store full'
-    world.agents = []
+    world.snapshot = { ...SNAPSHOT, sessions: SESSIONS.filter(s => !s.isBlocked) }
     await clock.advance(60_000)
 
     expect(await band.find({ type: 'Text', text: '1 waiting on you' })).toBeUndefined()
@@ -208,21 +242,22 @@ describe('the refresh', () => {
     expect(await pane.find({ type: 'Text', text: /not shared/ })).toBeUndefined()
   })
 
-  test('a snapshot another build stored, of another shape, is read again and never drawn', async ($, on) => {
+  test('a shared read of another shape is read again and never drawn', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     await $.session.start(SESSION)
     await clock.settle()
-    // The right options, but an older build's shape: schema 1, no repos.
-    const older: Record<string, unknown> = { ...(world.store.get('snapshot') as Record<string, unknown>), schema: 1, at: NOW + 30_000 }
+    const shared = world.store.get('shared') as { config: string; snapshot: Record<string, unknown> }
+    // The right options, but an older build's shape: schema 2, no repos.
+    const older: Record<string, unknown> = { ...shared.snapshot, schema: 2, at: NOW + 30_000 }
 
     delete older.repos
-    world.store.set('snapshot', older)
+    world.store.set('shared', { config: shared.config, snapshot: older })
     world.processes = []
     await clock.advance(60_000)
 
-    expect(world.processes.map(p => p.argv[1])).toEqual(['status', 'agents'])
+    expect(world.processes.map(p => p.argv[1])).toEqual(['snapshot'])
     await $.command.run({ ...RUN, args: 'tracks' })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await pane.find({ type: 'Text', text: 'demo-repo' })).toBeDefined()
@@ -231,7 +266,7 @@ describe('the refresh', () => {
 })
 
 describe('the band above the prompt', () => {
-  test('one line: tracks, who waits, each run source, colored by what needs the person', WITH_SOURCES, async ($, on) => {
+  test('one line: tracks, who waits, each run source, colored by what needs the person', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
@@ -239,7 +274,7 @@ describe('the band above the prompt', () => {
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
     await $.session.start(SESSION)
     // Drawn before the first read: it says so.
-    expect(await band.find({ type: 'Text', text: 'fleet: reading…' })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: 'herd: reading…' })).toBeDefined()
     await clock.settle()
 
     const unfinished = `Nightly ${dayOf(NOW - 5 * HOUR)} ✗ unfinished`
@@ -264,7 +299,7 @@ describe('the band above the prompt', () => {
     expect(await band.find({ type: 'Text', text: '1 waiting on you' })).toBeUndefined()
   })
 
-  test('a press opens the pane on what needs the person: failed runs first', WITH_SOURCES, async ($, on) => {
+  test('a press opens the pane on what needs the person: failed runs first', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
@@ -273,9 +308,9 @@ describe('the band above the prompt', () => {
     await clock.settle()
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-    await band.press({ key: 'fleet-open' })
+    await band.press({ key: 'herd-open' })
 
-    expect(world.opened).toEqual([{ id: 'fleet', focus: true, closeOnEscape: true }])
+    expect(world.opened).toEqual([{ id: 'herd', focus: true, closeOnEscape: true }])
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await pane.find({ type: 'Text', text: 'Nightly' })).toBeDefined()
   })
@@ -305,7 +340,7 @@ describe('the band above the prompt', () => {
 })
 
 describe('the status line and Ack', () => {
-  test('the oldest unacked failure is the status line; Ack clears it for every session', WITH_SOURCES, async ($, on) => {
+  test('the oldest unacked failure is the status line; Ack runs herd ack and clears it', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
@@ -317,43 +352,43 @@ describe('the status line and Ack', () => {
 
     await $.command.run({ ...RUN, args: 'runs' })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    const ackKey = `ack-${LOGS}/nightly-deep-dive-2026-10-09.jsonl@${NOW - 5 * HOUR}`
+    const ackKey = `ack-${FAILED_KEY}`
 
     expect(await pane.find({ key: ackKey })).toBeDefined()
     await pane.press({ key: ackKey })
+    await clock.settle()
 
+    expect(world.acks).toEqual([[FAILED_KEY]])
     expect(world.statuses).toEqual([world.statuses[0], undefined])
-    expect(world.store.get('acked')).toEqual([`${LOGS}/nightly-deep-dive-2026-10-09.jsonl@${NOW - 5 * HOUR}`])
     expect(await pane.find({ key: ackKey })).toBeUndefined()
     expect(await pane.find({ type: 'Text', text: /^ {2}nightly-deep-dive \d\d-\d\d \d\d:\d\d · acked · unfinished/ })).toBeDefined()
-
-    // The next refresh keeps it acked: no second status line.
+    // The press reads again at once, and herd's own acked list keeps it acked from then on.
+    expect(world.processes.filter(p => p.argv[1] === 'snapshot').length).toBe(2)
     await clock.advance(60_000)
     expect(world.statuses.length).toBe(2)
   })
 
-  test('an Ack the store refuses says so under the pane, and the failure stays', WITH_SOURCES, async ($, on) => {
+  test('an Ack herd refuses says so under the pane, and the failure stays', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     nightOf(world)
     await $.session.start(SESSION)
     await clock.settle()
-    world.storeDeny = 'store full'
+    world.ackDeny = 'herd: state dir not writable'
     await $.command.run({ ...RUN, args: 'runs' })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
 
     await pane.press({ key: 'ack-all' })
 
-    expect(await pane.find({ type: 'Text', text: 'ack failed: store full' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'ack failed: herd: state dir not writable' })).toBeDefined()
     expect(world.statuses.length).toBe(1)
     expect(await pane.find({ key: 'ack-all' })).toBeDefined()
   })
 
-  test('an Ack pressed while a refresh is reading stays acked when that refresh lands', WITH_SOURCES, async ($, on) => {
+  test('an Ack pressed while a refresh is reading stays acked when that refresh lands', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
-    const key = `${LOGS}/nightly-deep-dive-2026-10-09.jsonl@${NOW - 5 * HOUR}`
 
     nightOf(world)
     await $.session.start(SESSION)
@@ -361,7 +396,8 @@ describe('the status line and Ack', () => {
     await $.command.run({ ...RUN, args: 'runs' })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
 
-    // Refresh starts and waits on claude agents; the person acks meanwhile.
+    // A refresh starts and waits on herd; meanwhile the person acks, and herd
+    // answers that refresh with what it read before the ack.
     let release: () => void = () => undefined
 
     world.gate = new Promise<void>(resolve => {
@@ -369,47 +405,48 @@ describe('the status line and Ack', () => {
     })
     await pane.press({ key: 'refresh' })
     await clock.settle()
-    await pane.press({ key: `ack-${key}` })
+    const before = world.snapshot
+
+    await pane.press({ key: `ack-${FAILED_KEY}` })
     expect(world.statuses).toEqual([world.statuses[0], undefined])
+    world.snapshot = before
 
     world.gate = null
     release()
     await clock.settle()
 
     // The read that landed shows the ack: no status line pinned again, no Ack button back.
-    expect(world.processes.filter(p => p.argv[1] === 'agents').length).toBe(2)
     expect(world.statuses).toEqual([world.statuses[0], undefined])
-    expect(await pane.find({ key: `ack-${key}` })).toBeUndefined()
-    expect(world.store.get('acked')).toEqual([key])
+    expect(await pane.find({ key: `ack-${FAILED_KEY}` })).toBeUndefined()
   })
 })
 
-describe('the /fleet pane', () => {
-  test('/fleet opens a focused pane that Esc closes; /fleet runs opens it on Runs', async ($, on) => {
+describe('the /herd pane', () => {
+  test('/herd opens a focused pane that Esc closes; /herd runs opens it on Runs', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     await $.session.start(SESSION)
     await clock.settle()
     expect(await $.command.run(RUN)).toEqual({})
-    expect(world.opened).toEqual([{ id: 'fleet', focus: true, closeOnEscape: true }])
+    expect(world.opened).toEqual([{ id: 'herd', focus: true, closeOnEscape: true }])
 
     await $.command.run({ ...RUN, args: 'runs' })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await pane.find({ type: 'Text', text: /No run sources/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /No run sources: herd reads ~\/\.config\/herd\/sources\.json/ })).toBeDefined()
   })
 
-  test('/fleet says why when the pane waits', async ($, on) => {
+  test('/herd says why when the pane waits', async ($, on) => {
     mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     world.isPlaced = false
     await $.session.start(SESSION)
 
-    expect(await $.command.run(RUN)).toEqual({ text: 'The fleet pane is waiting: unasked below 144 columns' })
+    expect(await $.command.run(RUN)).toEqual({ text: 'The herd pane is waiting: unasked below 144 columns' })
   })
 
-  test('three tabs, on the terminal and the desktop', WITH_SOURCES, async ($, on) => {
+  test('three tabs, on the terminal and the desktop', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
@@ -432,6 +469,7 @@ describe('the /fleet pane', () => {
       await pane.press({ key: 'tab-runs' })
       expect(await pane.find({ type: 'Text', text: new RegExp(`nightly-report ${dayOf(NOW - 6 * HOUR)} \\d\\d:\\d\\d · ok`) })).toBeDefined()
       expect(await pane.find({ type: 'Text', text: /weekly \d\d-\d\d \d\d:\d\d · \[09:43\] === Weekly run done/ })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: '    success · 20 turns · ≈$2.42 · 0 denied · subagents 0/1 done · 1 killed' })).toBeDefined()
       await pane.unmount()
     }
   })
@@ -440,6 +478,7 @@ describe('the /fleet pane', () => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
+    world.snapshot = { ...SNAPSHOT, sessions: SESSIONS.map(s => (s.name === 'nightly report' ? { ...s, isLive: false } : s)) }
     await $.session.start(SESSION)
     await clock.settle()
     await $.command.run({ ...RUN, args: 'sessions' })
@@ -499,10 +538,10 @@ describe('the /fleet pane', () => {
     world.processes = []
     await pane.press({ key: 'refresh' })
     await clock.settle()
-    expect(world.processes.map(p => p.argv[1])).toEqual(['status', 'agents'])
+    expect(world.processes.map(p => p.argv[1])).toEqual(['snapshot'])
 
     await pane.press({ key: 'close' })
-    expect(world.closed).toEqual(['fleet'])
+    expect(world.closed).toEqual(['herd'])
   })
 
   test('/clear moves the session id: the new one is this session, offered no Ping', async ($, on) => {
@@ -512,7 +551,7 @@ describe('the /fleet pane', () => {
     await $.session.start(SESSION)
     await clock.settle()
     world.selfId = AFTER_CLEAR
-    world.agents = AGENTS.map(a => (a.sessionId === SELF ? { ...a, sessionId: AFTER_CLEAR } : a))
+    world.snapshot = { ...SNAPSHOT, sessions: SESSIONS.map(s => (s.sessionId === SELF ? { ...s, sessionId: AFTER_CLEAR } : s)) }
     await $.classic.SessionStart({ source: 'clear' })
     await clock.advance(60_000)
     await $.command.run({ ...RUN, args: 'sessions' })
@@ -523,27 +562,27 @@ describe('the /fleet pane', () => {
     expect(world.sent).toEqual([])
   })
 
-  test('/fleet taken by a skill of the same name: /fleet runs the skill, the band still opens the pane, and the pane says why', async ($, on) => {
+  test('/herd taken by a skill of the same name: /herd runs the skill, the band still opens the pane, and the pane says why', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
-    world.commandDeny = '"/fleet" refused: it is the user\'s /fleet'
+    world.commandDeny = '"/herd" refused: it is the user\'s /herd'
     await $.session.start(SESSION)
     await clock.settle()
 
     // What the person typed reaches their own skill; the mod opens nothing.
-    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /fleet' })
+    expect(await $.command.run({ ...RUN, args: 'runs' })).toEqual({ text: 'core ran /herd' })
     expect(world.opened).toEqual([])
 
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
-    await band.press({ key: 'fleet-open' })
-    expect(world.opened).toEqual([{ id: 'fleet', focus: true, closeOnEscape: true }])
+    await band.press({ key: 'herd-open' })
+    expect(world.opened).toEqual([{ id: 'herd', focus: true, closeOnEscape: true }])
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await pane.find({ type: 'Text', text: /^\/fleet not registered \(the band still opens this pane\): "\/fleet" refused/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^\/herd not registered \(the band still opens this pane\): "\/herd" refused/ })).toBeDefined()
   })
 
-  test('/clear keeps the band: the snapshot and acks come back from the store', async ($, on) => {
+  test('/clear keeps the band: the snapshot comes back from the store', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     worldOf(on)
 
@@ -555,16 +594,16 @@ describe('the /fleet pane', () => {
     expect(await band.find({ type: 'Text', text: '3 tracks: ' })).toBeDefined()
   })
 
-  test('a stored snapshot with a malformed row is not drawn: the pane keeps the last good one', async ($, on) => {
+  test('a shared read with a malformed row is not drawn: the pane keeps the last good one', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on)
 
     await $.session.start(SESSION)
     await clock.settle()
-    const stored = world.store.get('snapshot') as Record<string, unknown>
+    const shared = world.store.get('shared') as { config: string; snapshot: Record<string, unknown> }
 
     // This schema's number, but a session row without a sessionId (a hand-edited or corrupted store).
-    world.store.set('snapshot', { ...stored, at: NOW + 1, sessions: [{ kind: 'interactive', isLive: true }] })
+    world.store.set('shared', { config: shared.config, snapshot: { ...shared.snapshot, at: NOW + 1, sessions: [{ kind: 'interactive', isLive: true }] } })
     await $.classic.SessionStart({ source: 'clear' })
     await $.command.run({ ...RUN, args: 'sessions' })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -575,6 +614,10 @@ describe('the /fleet pane', () => {
     // And the next refresh reads again rather than adopt it.
     world.processes = []
     await clock.advance(60_000)
-    expect(world.processes.map(p => p.argv[1])).toEqual(['status', 'agents'])
+    expect(world.processes.map(p => p.argv[1])).toEqual(['snapshot'])
+  })
+
+  test('the night fixture is a snapshot this build draws', () => {
+    expect(NIGHT.schema).toBe(3)
   })
 })
