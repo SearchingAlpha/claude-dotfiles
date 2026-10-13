@@ -569,13 +569,14 @@ function currentRoute() {
   if (parts[0] === "overlaps") return { view: "overlaps" };
   if (parts[0] === "activity") return { view: "activity" };
   if (parts[0] === "agents") return { view: "agents" };
+  if (parts[0] === "graph") return { view: "graph", id: decodeURIComponent(parts[1] || "") };
   return { view: "fleet" };
 }
 
 function route() {
   const r = currentRoute();
   for (const a of document.querySelectorAll(".tabs a")) a.classList.toggle("on", a.dataset.view === r.view || (r.view === "track" && a.dataset.view === "fleet"));
-  clearInterval(detailTimer); clearInterval(activityTimer); clearInterval(agentsTimer);
+  clearInterval(detailTimer); clearInterval(activityTimer); clearInterval(agentsTimer); stopGraph();
   if (authFailed) return showAuth();
   if (r.view === "track") {
     loadDetail(r.common, r.name);
@@ -584,6 +585,8 @@ function route() {
     agentsJson = "";
     loadAgents();
     agentsTimer = setInterval(() => document.visibilityState === "visible" && loadAgents(), POLL_MS);
+  } else if (r.view === "graph") {
+    startGraph();
   } else if (r.view === "activity") {
     loadActivity();
     activityTimer = setInterval(() => document.visibilityState === "visible" && loadActivity(), DETAIL_MS);

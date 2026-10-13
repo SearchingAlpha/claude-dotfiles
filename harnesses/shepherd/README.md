@@ -138,9 +138,10 @@ What you run:
 - **Track detail** (click a card) — commits, per-file diff against main, uncommitted diff, the review, the session's subagents, the coordination log and the edit timeline.
 - **Overlaps** — a matrix of the tracks in each repo: how many files each pair both touches, red when merging them would conflict.
 - **Agents** — every session fanning out to the subagents it spawned (and theirs), each with what it's doing now (its latest tool call) and a status: *running*, *done*, *stalled* (silent for 15 minutes), *interrupted* (its session ended) or *stopped*. Arcs join tracks that messaged each other through the log or share files. Finished subagents older than 24 h drop off.
+- **Graph** — the [omnigraph](../../mods/omnigraph/README.md) stores on this machine, drawn the way the mod's pane draws them: one node in the middle, its incoming edges' nodes on the left and outgoing on the right, grouped by edge type. Click a node to draw the graph around it, or find one by name in the list on the left (busiest first, filtered by label or to the review queue); the panel on the right shows its properties, `path:line` sources and every relation. Under the drawing come the ops the omnigraph mod recorded from every session, with their `+n +e` change, latency and error; with *Follow ops* on, the graph jumps to the node each new op touched. A store is looked for under the roots omnigraph kept a feed for, enrolled repos and their track worktrees, and running sessions' folders, at the mod's `store` option and at each preset's store (so SupplyChainAgents' `ontology/build` shows up with no settings).
 - **Activity** — the last two hours of edits, one swimlane per session.
 
-Fleet and Agents refresh every 3 s while the tab is visible, track detail and Activity every 10 s, and reviews are re-checked every 2 minutes. The dashboard only listens on 127.0.0.1, needs the token from the printed URL, and changes nothing.
+Fleet, Agents and Graph refresh every 3 s while the tab is visible, track detail and Activity every 10 s, and reviews are re-checked every 2 minutes. The dashboard only listens on 127.0.0.1, needs the token from the printed URL, and changes nothing.
 
 ## Common situations
 
